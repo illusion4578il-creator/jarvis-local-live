@@ -6,57 +6,104 @@ import { cn } from '@/lib/utils';
 import ApperIcon from '@/components/ApperIcon';
 import UserMenu from '@/components/UserMenu';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
+import { Badge } from '@/components/ui/badge';
 
-/**
- * Placeholder owner shell — a plain top bar so the app is navigable before it is designed.
- * Overwrite it with the app's own shell (Platform Contract §12). Whatever the shape, keep
- * the parts: nav from useOwnerLayoutData(), UserMenu once, the page through <Outlet /> in
- * <main>. This is a layout route: it receives no `children` prop.
- */
 export default function OwnerLayout() {
-  const { user, logout, homeRoute, navItems, navGroups, initials, displayName, counts } = useOwnerLayoutData();
-  const grouped = navGroups.length ? navGroups : [{ label: null, items: navItems }];
+  const { user, logout, homeRoute, navItems, initials, displayName, counts } = useOwnerLayoutData();
   const [navOpen, setNavOpen] = useState(false);
 
-  const nav = grouped.map((g, i) => (
-    <div key={g.label ?? `g-${i}`} className="flex flex-wrap items-center gap-1">
-      {g.label && <span className="px-2 text-xs uppercase tracking-wide text-muted-foreground">{g.label}</span>}
-      {g.items.map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.to === '/'}
-          onClick={() => setNavOpen(false)}
-          className={({ isActive }) => cn(
-            'flex items-center gap-2 rounded-md px-3 py-2 text-sm',
-            isActive ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
-          )}
-        >
-          <ApperIcon name={item.icon ?? 'Circle'} size={18} />
-          <span>{item.label}</span>
-          {counts[item.to] != null && <span className="text-xs text-muted-foreground">{counts[item.to]}</span>}
-        </NavLink>
-      ))}
-    </div>
-  ));
-
   return (
-    <div className="min-h-svh bg-background text-foreground">
-      <header className="flex h-(--spacing-header) items-center gap-4 border-b border-border px-4">
-        <Link to={homeRoute} className="flex items-center gap-2 font-heading text-lg">
-          <ApperIcon name={APP_CONFIG.icon} size={20} /> {APP_CONFIG.name}
-        </Link>
-        <nav className="hidden items-center gap-1 md:flex">{nav}</nav>
-        <button type="button" className="md:hidden" aria-label="Toggle navigation" onClick={() => setNavOpen((o) => !o)}>
-          <ApperIcon name="Menu" size={22} />
-        </button>
-        <div className="ml-auto">
-          <UserMenu user={user} initials={initials} displayName={displayName} logout={logout} />
+    <div className="min-h-svh flex flex-col bg-background text-foreground">
+      <header className="sticky top-0 z-(--z-sticky) border-b border-sidebar-border bg-sidebar text-sidebar-foreground">
+        <div className="mx-auto flex h-(--spacing-header) max-w-7xl items-center gap-4 px-4 sm:px-6 lg:px-8">
+          <Link
+            to={homeRoute}
+            className="flex items-center gap-2.5 font-heading text-lg font-bold tracking-tight text-sidebar-foreground"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <ApperIcon name={APP_CONFIG.icon || 'Cpu'} size={18} />
+            </span>
+            <span>{APP_CONFIG.name}</span>
+            <Badge variant="outline" className="hidden sm:inline-flex border-highlight bg-highlight/15 text-foreground text-[11px]">
+              100% Local Hinglish AI
+            </Badge>
+          </Link>
+
+          <nav className="hidden md:flex items-center gap-1 ml-4 h-full">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === '/'}
+                className={({ isActive }) =>
+                  cn(
+                    'relative flex h-full items-center gap-2 px-3.5 text-sm font-medium transition-colors duration-(--transition-fast)',
+                    isActive
+                      ? 'text-primary border-b-2 border-highlight font-semibold'
+                      : 'text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/60'
+                  )
+                }
+              >
+                <ApperIcon name={item.icon ?? 'Circle'} size={16} />
+                <span>{item.label}</span>
+                {counts[item.to] != null && (
+                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    {counts[item.to]}
+                  </span>
+                )}
+              </NavLink>
+            ))}
+          </nav>
+
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-md text-sidebar-foreground hover:bg-sidebar-accent md:hidden"
+              aria-label="Toggle navigation"
+              onClick={() => setNavOpen((prev) => !prev)}
+            >
+              <ApperIcon name={navOpen ? 'X' : 'Menu'} size={20} />
+            </button>
+            <UserMenu user={user} initials={initials} displayName={displayName} logout={logout} />
+          </div>
         </div>
+
+        {navOpen && (
+          <nav className="flex flex-col gap-1 border-t border-sidebar-border bg-sidebar px-4 py-3 md:hidden">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === '/'}
+                onClick={() => setNavOpen(false)}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium',
+                    isActive
+                      ? 'bg-sidebar-accent text-primary font-semibold'
+                      : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground'
+                  )
+                }
+              >
+                <span className="flex items-center gap-2.5">
+                  <ApperIcon name={item.icon ?? 'Circle'} size={17} />
+                  <span>{item.label}</span>
+                </span>
+                {counts[item.to] != null && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                    {counts[item.to]}
+                  </span>
+                )}
+              </NavLink>
+            ))}
+          </nav>
+        )}
       </header>
-      {navOpen && <nav className="flex flex-col gap-1 border-b border-border p-2 md:hidden">{nav}</nav>}
-      <main className="p-4 md:p-6">
-        <ErrorBoundary><Outlet /></ErrorBoundary>
+
+      <main className="flex-1 w-full">
+        <ErrorBoundary>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   );
