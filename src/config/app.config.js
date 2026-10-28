@@ -1,35 +1,18 @@
-/**
- * app.config.js — APP IDENTITY & AUTH CONFIG
- *
- * Branding, theme, and auth configuration only.
- * Routes are self-declared by each page (export const route).
- * Nav items are self-declared by each page (export const nav).
- * Tables are auto-discovered from mockData/*.json files.
- */
-
 export const APP_CONFIG = {
-  name: 'MyApp',
-  tagline: 'Your app tagline here',
-  emoji: '🚀',
-  icon: 'Box',
-
+  name: 'J.A.R.V.I.S. Local Studio',
+  tagline: 'Autonomous Local Hinglish Voice AI, OS Control & RAG Workbench',
+  emoji: '🎙️',
+  icon: 'Cpu',
   defaultTheme: 'system',
   defaultLoginRoute: '/login',
 };
 
-/**
- * Per-role auth routes and copy.
- * null when the app has no distinct profiles (uses GENERIC_AUTH instead).
- */
 export const AUTH_PROFILES = null;
 
-/**
- * Fallback auth copy when AUTH_PROFILES is null or URL profile doesn't match.
- */
 export const GENERIC_AUTH = {
-  loginTitle: 'Welcome back',
-  signupTitle: 'Create account',
-  loginDescription: null,
+  loginTitle: 'Sign in to J.A.R.V.I.S. Local Studio',
+  signupTitle: 'Create Operator Account',
+  loginDescription: 'Access Akash’s local Hinglish Voice AI telemetry, learned skills, ChromaDB RAG vault, and Python architecture.',
   signupDescription: null,
-  redirectAfterAuth: '/dashboard',
+  redirectAfterAuth: '/',
 };
