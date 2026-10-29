@@ -1,4 +1,5 @@
 import bootstrapSource from '../../jarvis_bootstrap.py?raw';
+import launcherSource from '../../Launch_Jarvis.bat?raw';
 
 export const SYSTEM_PROMPT_TEXT = `You are an advanced, autonomous personal AI assistant running locally on the user's computer, inspired by Jarvis. Your user's name is Akash. You are interacting via a real-time Voice Call Interface.Directives:
 1. Speak naturally in Hinglish. Keep your spoken responses concise and conversational.
@@ -1058,20 +1059,15 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama-3.1-8b-instruct-abliterated
 \`\`\`
 
-## Step 3: Install Python Dependencies (Including PyQt5)
+## Step 3: One-Click Setup and Launch (Windows)
+Double-click **Launch_Jarvis.bat** inside the jarvis_assistant folder. It finds Python 3.11 (installs it with winget if missing), creates the venv, installs every package from requirements.txt, runs diagnostics, and opens the Floating HUD. Nothing else needs to be typed.
+
+## Step 4: Run Bootstrap Manually (macOS / Linux, or a terminal)
 \`\`\`bash
 cd jarvis_assistant
-python -m venv venv
-venv\\Scripts\\activate
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install -r requirements.txt
-\`\`\`
-
-## Step 4: Run Bootstrap Diagnostics and Launch the Floating Desktop GUI
-\`\`\`bash
 python jarvis_bootstrap.py --no-elevate
 \`\`\`
-Download jarvis_bootstrap.py and all Python modules into the same project folder first. Normal-user mode is recommended for desktop audio. Omit --no-elevate to request Windows UAC or an interactive Unix sudo prompt; elevation cannot override microphone privacy settings or guarantee unrestricted access.
+The bootstrap creates ./venv, installs requirements.txt (re-installs only when it changes), and relaunches itself inside that venv. Normal-user mode is recommended for desktop audio. Omit --no-elevate to request Windows UAC or an interactive Unix sudo prompt; elevation cannot override microphone privacy settings or guarantee unrestricted access.
 
 Use --check-only to diagnose without launching. Use --entry voice_loop.py for the included headless voice loop, or --entry voice_engine.py if you supply that module. Repairs ask for confirmation; --repair authorizes only predefined repairs. Package installation is never attempted as root/admin. Firewall rules and arbitrary LLM commands are never modified/executed.
 
@@ -1085,7 +1081,15 @@ Optional .env settings: ODYSSEUS_BASE_URL=http://localhost:7011, ODYSSEUS_HEALTH
     title: '8. Diagnostics & Bootstrap',
     filename: 'jarvis_bootstrap.py',
     language: 'python',
-    description: 'Complete cross-platform preflight script with OS consent prompts, audio and local API checks, bounded repairs, tracebacks, and GUI or voice-loop handoff.',
+    description: 'One-click preflight script: creates ./venv, installs requirements.txt, runs audio and local API checks, bounded repairs, and launches Jarvis.',
     content: bootstrapSource
+  },
+  {
+    id: 'launcher',
+    title: '9. One-Click Launcher (Launch_Jarvis.bat)',
+    filename: 'Launch_Jarvis.bat',
+    language: 'text',
+    description: 'Windows double-click launcher. Finds Python 3.11, then runs jarvis_bootstrap.py, which handles venv, packages and startup.',
+    content: launcherSource
   }
 ];

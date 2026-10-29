@@ -329,6 +329,41 @@ def instructions(errors, ollama, odysseus):
         LOG.error("Review jarvis-bootstrap.log for the exact traceback. Never disable your firewall; check app-specific loopback rules with your administrator.")
 
 
+VENV = ROOT / "venv"
+REQUIREMENTS_STAMP = VENV / ".requirements.sha256"
+
+
+def venv_python():
+    return VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def ensure_venv():
+    """One-click setup: create ./venv and install requirements.txt when it changes.
+
+    Runs as the normal user; packages are never installed as root/admin.
+    Returns the venv interpreter that must run Jarvis.
+    """
+    import hashlib
+
+    requirements = ROOT / "requirements.txt"
+    if not requirements.is_file():
+        raise FileNotFoundError("requirements.txt is missing. Download the complete Jarvis package first.")
+    python = venv_python()
+    if not python.exists():
+        if elevated():
+            raise PermissionError("Run Launch_Jarvis.bat as your normal user, not as administrator.")
+        LOG.info("Creating virtual environment: %s", VENV)
+        subprocess.check_call([sys.executable, "-m", "venv", str(VENV)], cwd=ROOT)
+    digest = hashlib.sha256(requirements.read_bytes()).hexdigest()
+    if not REQUIREMENTS_STAMP.is_file() or REQUIREMENTS_STAMP.read_text(encoding="utf-8").strip() != digest:
+        if elevated():
+            raise PermissionError("Run Launch_Jarvis.bat as your normal user, not as administrator.")
+        LOG.info("Installing requirements (the first run can take several minutes)...")
+        subprocess.check_call([str(python), "-m", "pip", "install", "-r", str(requirements)], cwd=ROOT)
+        REQUIREMENTS_STAMP.write_text(digest, encoding="utf-8")
+    return python
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-elevate", action="store_true", help="Keep your normal desktop/audio user session")
@@ -345,6 +380,10 @@ def main():
     except OSError:
         LOG.warning("Cannot write diagnostic log; errors will still print to the console.")
     try:
+        python = ensure_venv()
+        if Path(sys.executable).absolute() != python.absolute():
+            LOG.info("Relaunching inside the project virtual environment.")
+            return subprocess.call([str(python), str(Path(__file__).resolve()), *sys.argv[1:]], cwd=ROOT)
         status = request_elevation(args)
         if status is not None:
             return status
