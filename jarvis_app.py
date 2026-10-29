@@ -258,6 +258,22 @@ def recall(query):
     return trim("\n\n".join(f"[{name}]\n{text[:2000]}" for _, name, text in hits[:3]))
 
 
+def web_search(query, limit=5):
+    response = requests.get("https://html.duckduckgo.com/html/", params={"q": query}, timeout=20,
+                            headers={"User-Agent": "Mozilla/5.0 Jarvis/1.0"})
+    response.raise_for_status()
+    links = re.findall(r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', response.text, flags=re.S)
+    snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', response.text, flags=re.S)
+    results = []
+    for index, (href, title) in enumerate(links[:limit]):
+        clean_title = re.sub(r"<[^>]+>", "", title).strip()
+        snippet = re.sub(r"<[^>]+>", "", snippets[index]).strip() if index < len(snippets) else ""
+        results.append(f"{index + 1}. {clean_title}\n   {href}\n   {snippet}")
+    if not results:
+        return "No search results found."
+    return trim("\n\n".join(results))
+
+
 TOOL_FUNCTIONS = {
     "run_command": run_command,
     "open_app": open_app,
@@ -276,6 +292,7 @@ TOOL_FUNCTIONS = {
     "learn_from_url": learn_from_url,
     "save_knowledge": save_knowledge,
     "recall": recall,
+    "web_search": web_search,
 }
 
 
@@ -315,6 +332,9 @@ TOOL_SCHEMAS = [
     tool("save_knowledge", "Save a note or fact the user taught to Jarvis memory.",
          {"title": TEXT_SCHEMA, "text": TEXT_SCHEMA}, ["title", "text"]),
     tool("recall", "Search Jarvis memory for saved knowledge relevant to a query.", {"query": TEXT_SCHEMA}, ["query"]),
+    tool("web_search", "Search the internet for a question or topic and return top results with links and snippets. "
+         "Use it to find up-to-date information, then open_url or learn_from_url for details.",
+         {"query": TEXT_SCHEMA, "limit": {"type": "integer"}}, ["query"]),
 ]
 
 
