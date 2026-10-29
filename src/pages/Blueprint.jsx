@@ -40,7 +40,7 @@ export default function Blueprint() {
             <div>
               <div className="flex items-center gap-2">
                 <Badge className="bg-highlight text-highlight-foreground">
-                  6 Sequential Deliverables
+                  {CODEBASE_FILES.length} Sequential Deliverables
                 </Badge>
                 <span className="text-xs text-primary-foreground/80">
                   Python 3.11 · LangChain · Ollama · Silero VAD · faster-whisper · XTTSv2 · ChromaDB

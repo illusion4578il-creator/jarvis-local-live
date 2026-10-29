@@ -1,3 +1,5 @@
+import bootstrapSource from '../../jarvis_bootstrap.py?raw';
+
 export const SYSTEM_PROMPT_TEXT = `You are an advanced, autonomous personal AI assistant running locally on the user's computer, inspired by Jarvis. Your user's name is Akash. You are interacting via a real-time Voice Call Interface.Directives:
 1. Speak naturally in Hinglish. Keep your spoken responses concise and conversational.
 2. DO NOT output markdown, asterisks, long lists, or code blocks in your conversational replies, because they will sound glitchy when read by the Text-to-Speech engine.
@@ -13,6 +15,7 @@ export const CODEBASE_FILES = [
     language: 'text',
     description: 'Complete local directory layout including gui_app.py (Floating Desktop GUI with Glowing Waveform Visualizer) and Uncensored Odysseus/Ollama config.',
     content: `jarvis_assistant/
+├── jarvis_bootstrap.py        # Permission prompts, audio/API diagnostics, bounded repairs and launch handoff
 ├── gui_app.py                 # UPGRADED: PyQt5 Floating HUD with Real-Time Glowing Voice Waveform Bar + ON/OFF Switch + Wake-Word
 ├── voice_loop.py              # UPGRADED: Streams real-time Mic RMS & TTS Audio Envelope levels to the HUD Waveform Visualizer
 ├── agent.py                   # Uncensored Brain: LangChain + Ollama (llama-3.1-8b-instruct-abliterated) + Odysseus Bridge
@@ -1064,11 +1067,25 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 \`\`\`
 
-## Step 4: Launch the Floating Desktop GUI with Real-Time Voice Waveform
+## Step 4: Run Bootstrap Diagnostics and Launch the Floating Desktop GUI
 \`\`\`bash
-python gui_app.py
+python jarvis_bootstrap.py --no-elevate
 \`\`\`
+Download jarvis_bootstrap.py and all Python modules into the same project folder first. Normal-user mode is recommended for desktop audio. Omit --no-elevate to request Windows UAC or an interactive Unix sudo prompt; elevation cannot override microphone privacy settings or guarantee unrestricted access.
+
+Use --check-only to diagnose without launching. Use --entry voice_loop.py for the included headless voice loop, or --entry voice_engine.py if you supply that module. Repairs ask for confirmation; --repair authorizes only predefined repairs. Package installation is never attempted as root/admin. Firewall rules and arbitrary LLM commands are never modified/executed.
+
+Optional .env settings: ODYSSEUS_BASE_URL=http://localhost:7011, ODYSSEUS_HEALTH_PATH=/ (replace with your deployment's actual health endpoint), and ODYSSEUS_CONTAINER=<existing-container-name> for a consented Docker start. OLLAMA_BASE_URL and OLLAMA_MODEL use the settings above. Failures include exact tracebacks in jarvis-bootstrap.log and manual recovery steps. Successful connectivity checks do not implement an Odysseus agent bridge.
+
 - **When Jarvis: OFF (Red):** Microphone stream is completely closed and the 28-bar waveform is locked flat.
 - **When Jarvis: ON (Green):** Silero VAD arms the mic; speaking lights up the waveform in **Glowing Cyan-Emerald**, and Jarvis's TTS response pulses the waveform in **Glowing Amber-Indigo**.`
+  },
+  {
+    id: 'bootstrap',
+    title: '8. Diagnostics & Bootstrap',
+    filename: 'jarvis_bootstrap.py',
+    language: 'python',
+    description: 'Complete cross-platform preflight script with OS consent prompts, audio and local API checks, bounded repairs, tracebacks, and GUI or voice-loop handoff.',
+    content: bootstrapSource
   }
 ];
