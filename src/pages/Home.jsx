@@ -75,7 +75,7 @@ export default function Home() {
     error: metricsError,
     run: refreshMetrics
   } = useFetch(async () => {
-    const [skillsRes, docsRes, execRes, memRes] = await Promise.all([
+    const [skillsRes, docsRes, execRes, memRes, activeMemRes] = await Promise.all([
       sdk
         .table('skills_c')
         .select([{ field: 'Id' }])
@@ -112,12 +112,16 @@ export default function Home() {
         .table('memories_c')
         .select([{ field: 'Id' }])
         .aggregate([
-          { id: 'totalMemories', fields: [{ field: 'Id', fn: 'Count', alias: 'count' }] },
-          {
-            id: 'activeMemories',
-            fields: [{ field: 'Id', fn: 'Count', alias: 'count' }],
-            where: eq('active_c', true)
-          }
+          { id: 'totalMemories', fields: [{ field: 'Id', fn: 'Count', alias: 'count' }] }
+        ])
+        .limit(1)
+        .fetch(),
+      sdk
+        .table('memories_c')
+        .select([{ field: 'Id' }])
+        .where(eq('active_c', true))
+        .aggregate([
+          { id: 'activeMemories', fields: [{ field: 'Id', fn: 'Count', alias: 'count' }] }
         ])
         .limit(1)
         .fetch()
@@ -137,7 +141,7 @@ export default function Home() {
       totalExecs: readAgg(execRes, 'totalExecs'),
       avgLatency: Math.round(readAgg(execRes, 'avgLatency') || 645),
       totalMemories: readAgg(memRes, 'totalMemories'),
-      activeMemories: readAgg(memRes, 'activeMemories')
+      activeMemories: readAgg(activeMemRes, 'activeMemories')
     };
   }, []);
 
