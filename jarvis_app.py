@@ -41,8 +41,8 @@ SYSTEM_PROMPT = (
     "PowerShell and cmd, programs, files and folders, running processes, system information, Windows settings, "
     "power actions, the web, and your own saved memory. Use tools to act; never say you cannot access the PC "
     "when a tool can do it. For multi-step tasks, first say a one-line plan, then use one tool at a time and check "
-    "each result before the next. File tools work only inside the allowed folders; if one is refused, tell the user "
-    "to add that folder in Settings. Only delete, kill, shut down or restart when the user clearly asked for it. "
+    "each result before the next. File tools can access any folder on the PC. "
+    "Only delete, kill, shut down or restart when the user clearly asked for it. "
     "Your replies are spoken aloud: keep them short, natural and conversational, with no markdown, code blocks "
     "or lists. Reply in the same language the user speaks (Hindi, Hinglish or English)."
 )
@@ -92,11 +92,7 @@ FONT = "Consolas"
 
 def check_path(path):
     target = Path(path).expanduser().resolve()
-    for folder in SETTINGS["allowed_folders"]:
-        root = Path(folder).expanduser().resolve()
-        if target == root or root in target.parents:
-            return target
-    raise PermissionError(f"{target} allowed folders mein nahi hai. Settings mein folder add karein.")
+    return target
 
 
 def trim(text, limit=OUTPUT_LIMIT):
@@ -727,12 +723,6 @@ class Jarvis:
         tk.Scale(win, from_=100, to=1500, orient="horizontal", variable=threshold_var, bg=BG, fg=TEXT,
                  troughcolor=PANEL, highlightthickness=0, activebackground=CYAN).pack(fill="x", padx=22)
 
-        tk.Label(win, text="FOLDERS JARVIS FILES CHHU SAKTA HAI (ek line mein ek folder)", font=(FONT, 9, "bold"),
-                 fg=CYAN, bg=BG, anchor="w").pack(fill="x", padx=22, pady=(14, 4))
-        folders = tk.Text(win, height=3, font=(FONT, 10), bg=PANEL, fg=TEXT, insertbackground=CYAN,
-                          relief="flat", wrap="none", highlightthickness=1, highlightbackground=PANEL_EDGE)
-        folders.insert("1.0", "\n".join(SETTINGS["allowed_folders"]))
-        folders.pack(fill="x", padx=22)
         steps_var = tk.IntVar(value=int(SETTINGS["max_agent_steps"]))
         tk.Label(win, text="AGENT STEPS (ek kaam mein maximum tool calls)", font=(FONT, 9, "bold"), fg=CYAN, bg=BG,
                  anchor="w").pack(fill="x", padx=22, pady=(14, 0))
@@ -753,11 +743,6 @@ class Jarvis:
             SETTINGS["voice_enabled"] = bool(voice_var.get())
             SETTINGS["speech_rate"] = int(rate_var.get())
             SETTINGS["mic_threshold"] = int(threshold_var.get())
-            folder_list = [line.strip() for line in folders.get("1.0", "end").splitlines() if line.strip()]
-            if not folder_list:
-                messagebox.showwarning("Jarvis", "Kam se kam ek folder allowed honi chahiye.", parent=win)
-                return
-            SETTINGS["allowed_folders"] = folder_list
             SETTINGS["max_agent_steps"] = int(steps_var.get())
             SETTINGS["confirm_destructive"] = bool(confirm_var.get())
             save_settings(SETTINGS)
