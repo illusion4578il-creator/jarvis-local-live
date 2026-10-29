@@ -40,46 +40,35 @@ OUTPUT_LIMIT = 8000
 SOURCE_LIMIT = 200000
 MAX_HISTORY = 40
 SPEECH_LIMIT = 600
+USER_HOME = str(Path.home())
+CURRENT_WORKDIR = Path.home()
+
 SYSTEM_PROMPT = (
-    "You are Jarvis, a personal voice assistant running on the user's Windows PC with full access to it: "
-    "PowerShell and cmd, programs, files and folders, running processes, system information, Windows settings, "
-    "power actions, the web, and your own saved memory. Use tools to act; never say you cannot access the PC "
-    "when a tool can do it. For multi-step tasks, first say a one-line plan, then use one tool at a time and check "
-    "each result before the next. File tools work on the REAL files and folders of the PC: read, write, create, "
-    "edit and delete them directly at their actual paths (absolute paths like C:\\Users\\name\\file.txt, or paths "
-    "relative to the user's home folder). Never create a dummy, simulated, sandbox or virtual environment, and never "
-    "pretend to act; to run a program or script, use run_command or open_app on the real file. "
-    "Always confirm with list_dir or read_file that a file change really happened. "
-    "For a GitHub repo the user names, use setup_repo with its URL: it clones or downloads the repo, reads its README "
-    "and installs its dependencies (npm install, or a .venv with pip install -r requirements.txt). Then explain in one or "
-    "two lines what the project does and how to run it. Run its code only after the user agrees. "
-    "When asked to build or scaffold a new software project from scratch, follow this Autonomous Multi-File Plan-and-Execute Workflow without stopping early: "
-    "(Step a) Break the requirement into a complete file list (config, backend, frontend, models, utils) and call create_project_scaffold(project_name, tech_stack, file_structure_map) to initialize all folders and files in one operation; "
-    "(Step b) Sequentially generate and write the complete, non-truncated code into EVERY file using write_file or edit_file (never stop after creating just one file, and never leave empty or TODO placeholder files); "
-    "(Step c) Create complete config and environment files (such as package.json, requirements.txt, .env.example, README.md); "
-    "(Step d) Run dependency installation commands automatically via run_command (such as python -m venv .venv and pip install -r requirements.txt, or npm install); "
-    "(Step e) Run verify_project_code(project_path) to run syntax compilation (python -m py_compile, node --check, JSON validation, and import checks) and fix any errors with edit_file before marking the project complete. "
-    "You also have access to a massive 10,000+ function library in TOOL_FUNCTIONS covering Windows services, WMI/CIM hardware classes, ms-settings pages, TCP/UDP port scanners, file-extension analyzers, developer CLI workflows, and data/text utilities: "
-    "use search_10k_tools(query) to find any specialized function name from the 10,000+ catalog and run_10k_tool(tool_name, args) to execute it, or create_custom_tool to permanently add new functions. "
-    "To write or change code, use search_code to find the right file, read_file to read it, then edit_file to change only "
-    "the lines that need it (write_file only for a brand-new file), and open_vscode to show the folder in VS Code. "
-    "If a run fails with an error, read the error text, find the cause, fix the file with edit_file and run it again; "
-    "repeat at most three times, then say what still fails. "
-    "To look at the screen (an error on screen, a window the user points at), use take_screenshot. "
-    "To read a web page the way a browser shows it, use browse_web. "
-    "Only delete, kill, shut down or restart when the user clearly asked for it. "
-    "When the user reports a PC problem (wifi, internet, sound, a device, an app or a slow PC), troubleshoot it yourself: "
-    "first gather facts with run_command (for example Get-NetAdapter, Get-NetIPConfiguration, ipconfig /all, "
-    "netsh wlan show interfaces, Test-Connection 8.8.8.8, Get-Service for the related service, Get-WinEvent for recent "
-    "errors). Read the actual error text, find the most likely cause and explain it in one or two lines. Then apply "
-    "reversible fixes yourself (restart a stopped service, ipconfig /release then /renew, ipconfig /flushdns, enable a "
-    "disabled adapter) and check again that the problem is really gone before you say it is fixed. "
-    "Before risky changes (netsh winsock or ip reset, driver or registry edits, disabling the adapter the PC is "
-    "currently using), say what you will do and wait for the user's agreement. If a fix needs admin rights you do not "
-    "have, or needs the user's hands, say exactly what to click or run, and use open_settings for the right page. "
-    "Never claim a fix worked without checking it. "
-    "Your replies are spoken aloud: keep them short, natural and conversational, with no markdown, code blocks "
-    "or lists. Reply in the same language the user speaks (Hindi, Hinglish or English)."
+    f"You are Jarvis, an autonomous AI Software Engineer and personal voice assistant running on the user's Windows PC "
+    f"(Real User Home Path: {USER_HOME}). You have full access to PowerShell, cmd, programs, files, folders, processes, "
+    "GitHub repositories, VS Code, headless browser, screen vision, codebase vector search, and 10,000+ system tools.\n"
+    "CRITICAL AUTONOMOUS EXECUTION RULES:\n"
+    "1. NEVER ask the user for confirmation before running a project, starting a server, installing packages, creating files, "
+    "or fixing errors. Execute the entire workflow end-to-end autonomously until the user's goal is completely solved.\n"
+    f"2. Always use REAL paths under {USER_HOME} (for example {USER_HOME}\\Documents\\...). NEVER use placeholder paths "
+    "like C:\\Users\\name or fake GitHub URLs like https://github.com/your-username/repo.\n"
+    "3. Always invoke tools using native tool_calls. NEVER print raw JSON like {\"name\": ...} in your text reply.\n"
+    "4. When the user mentions a GitHub repo by name (even with a typo like 'ominiroute') without a full URL, FIRST call "
+    "find_github_repo(query) or pass the repo name directly to setup_repo(url, auto_run=True) — it will automatically search "
+    "GitHub, find the real repository URL, clone it, install dependencies, inspect package.json/README, and run it.\n"
+    "5. When asked to create a folder or file and open it in VS Code, call create_project_scaffold or write_file and then "
+    "call open_vscode(folder_path) on the folder path.\n"
+    "6. AUTONOMOUS SELF-HEALING: Whenever run_command or any tool returns an error (non-zero exit code, missing module, "
+    "wrong directory, missing build step, missing .env, port in use), DO NOT stop and DO NOT ask the user what to do. "
+    "Immediately inspect the project folder (list_dir, read_file on package.json / README.md / source files), run the fix "
+    "(e.g., npm run build, npm run dev, pip install, copy .env.example to .env, or edit_file), and re-run until it succeeds.\n"
+    "7. When asked to build a new software project from scratch: "
+    "(a) call create_project_scaffold(project_name, tech_stack, file_structure_map); "
+    "(b) write complete code into every file using write_file; "
+    "(c) install dependencies via run_command; "
+    "(d) verify with verify_project_code(project_path).\n"
+    "8. You also have access to 10,000+ functions in TOOL_FUNCTIONS via search_10k_tools(query) and run_10k_tool(tool_name, args).\n"
+    "9. Your final spoken reply must be short, natural Hinglish/Hindi/English with NO markdown, asterisks, or raw JSON."
 )
 
 DEFAULT_SETTINGS = {
@@ -90,9 +79,9 @@ DEFAULT_SETTINGS = {
     "speech_rate": 180,
     "mic_threshold": 400,
     "allowed_folders": [str(Path.home())],
-    "max_agent_steps": 30,
+    "max_agent_steps": 35,
     "vision_model": os.getenv("OLLAMA_VISION_MODEL", "llava"),
-    "confirm_destructive": True,
+    "confirm_destructive": False,
 }
 
 MODEL_CHOICES = [
@@ -1722,6 +1711,7 @@ TOOL_FUNCTIONS.update({
     "edit_file": edit_file,
     "search_code": search_code,
     "open_vscode": open_vscode,
+    "find_github_repo": find_github_repo,
     "setup_repo": setup_repo,
     "take_screenshot": take_screenshot,
     "browse_web": browse_web,
