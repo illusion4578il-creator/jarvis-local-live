@@ -20,6 +20,17 @@ node scripts/export-jarvis.mjs jarvis-release-new
 
 Exported `jarvis_assistant` folder ko standalone GitHub repository mein upload kar sakte hain. Apna actual GitHub URL share karein; is manual mein koi fabricated repository URL nahi diya gaya. Model weights, personal books aur speaker recording ZIP mein included nahi hain. Third-party code/model licences separately apply; publish karne se pehle apne source distribution rights review karein.
 
+### GitHub par publish karein (browser se, Git commands ke bina)
+
+1. App ke **Python Codebase → Download complete ZIP** se package download aur extract karein.
+2. https://github.com/new par sign in karke naya repository banayein. Sabko download allow karna ho to **Public** select karein; pehle source aur third-party licences review karein.
+3. Repository mein **Add file → Upload files** kholein. Extracted `jarvis_assistant` folder ke **andar ke files aur subfolders** upload karein, taaki `README.md` aur Python entry files repository root mein hon. Sirf ZIP upload karne se source browse nahi hoga.
+4. Upload list manually check karein: `.env.example` aur `.gitignore` include hon; actual `.env`, API keys, recordings, personal books, memory databases aur logs include **na** hon. Browser upload mein `.gitignore` ko automatic protection na samjhein. Hidden files nazar nahi aa rahe hon to file explorer mein hidden files enable karein.
+5. **Commit changes** click karein. Repository ka actual URL share karein; doosre log **Code → Download ZIP** se download karke isi manual ke local setup steps follow kar sakte hain.
+6. Ready-made assistant ZIP bhi dena ho to repository ke **Releases → Draft a new release** mein version tag banayein, downloaded package ZIP attach karein aur release publish karein. GitHub browser source upload mein per-file limit 25 MiB hai; bade model weights upload na karein.
+
+GitHub upload aapke signed-in GitHub account se hota hai. Is studio ka ZIP download khud se repository create ya publish nahi karta. GitHub password ya personal access token chat mein share na karein.
+
 ## 2. Prerequisites aur safety
 
 - Python **3.11**, Ollama, working default microphone/speaker, aur graphical desktop session.
