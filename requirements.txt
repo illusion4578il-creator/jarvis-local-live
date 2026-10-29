@@ -7,3 +7,5 @@ pyttsx3
 SpeechRecognition
 pillow
 playwright
+pygetwindow
+chromadb

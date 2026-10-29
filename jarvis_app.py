@@ -445,13 +445,26 @@ def setup_repo(url, folder=""):
     return trim(f"Folder: {target}\n\n" + "\n\n".join(steps), 8000)
 
 
-def take_screenshot(question="Screen par kya dikh raha hai? Koi error ho to uska fix batao."):
+def take_screenshot(question="Screen par kya dikh raha hai? Koi error ho to uska fix batao.", window_title=""):
     try:
         from PIL import ImageGrab
     except ImportError:
         return "Screenshot ke liye Pillow chahiye. Terminal mein 'pip install pillow' chalayein."
+    if window_title:
+        try:
+            import pygetwindow as gw
+        except ImportError:
+            return "Window screenshot ke liye pygetwindow chahiye. Terminal mein 'pip install pygetwindow' chalayein."
+        matches = [w for w in gw.getAllWindows() if window_title.lower() in w.title.lower()
+                   and w.width > 0 and w.height > 0]
+        if not matches:
+            return f"'{window_title}' naam ki window nahi mili."
+        window = matches[0]
+        image = ImageGrab.grab(bbox=(window.left, window.top, window.right, window.bottom))
+    else:
+        image = ImageGrab.grab()
     buffer = io.BytesIO()
-    ImageGrab.grab().save(buffer, format="PNG")
+    image.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     model = SETTINGS.get("vision_model") or "llava"
     response = requests.post(f"{SETTINGS['ollama_url']}/api/chat", json={
@@ -490,6 +503,64 @@ def browse_web(url):
     return trim(f"{title}\n{url}\n\n{text}")
 
 
+CODEBASE_INDEX = ROOT / "codebase_index"
+CODEBASE_CHUNK_LINES = 40
+
+
+def index_codebase(folder_path):
+    try:
+        import chromadb
+    except ImportError:
+        return "Codebase index ke liye chromadb chahiye. Terminal mein 'pip install chromadb' chalayein."
+    target = check_path(folder_path)
+    if not target.is_dir():
+        return f"Folder nahi mila: {target}"
+    ids, documents, metadatas = [], [], []
+    for dirpath, dirnames, filenames in os.walk(target):
+        dirnames[:] = [name for name in dirnames if name not in SKIP_DIRS]
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if path.suffix.lower() not in CODE_EXTENSIONS:
+                continue
+            try:
+                if path.stat().st_size > 300000:
+                    continue
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for start in range(0, len(lines), CODEBASE_CHUNK_LINES):
+                chunk = "\n".join(lines[start:start + CODEBASE_CHUNK_LINES]).strip()
+                if not chunk:
+                    continue
+                ids.append(f"{path}:{start + 1}")
+                documents.append(chunk)
+                metadatas.append({"path": str(path), "line": start + 1})
+    if not documents:
+        return "Is folder mein code file nahi mili."
+    collection = chromadb.PersistentClient(path=str(CODEBASE_INDEX)).get_or_create_collection(name="codebase")
+    for begin in range(0, len(ids), 256):
+        collection.upsert(ids=ids[begin:begin + 256], documents=documents[begin:begin + 256],
+                          metadatas=metadatas[begin:begin + 256])
+    return f"{len(documents)} code chunks index ho gaye: {target}"
+
+
+def search_codebase(query, limit=5):
+    try:
+        import chromadb
+    except ImportError:
+        return "Codebase search ke liye chromadb chahiye. Terminal mein 'pip install chromadb' chalayein."
+    if not CODEBASE_INDEX.exists():
+        return "Codebase abhi index nahi hai. Pehle index_codebase chalayein."
+    collection = chromadb.PersistentClient(path=str(CODEBASE_INDEX)).get_or_create_collection(name="codebase")
+    count = collection.count()
+    if count == 0:
+        return "Index khaali hai. Pehle index_codebase chalayein."
+    result = collection.query(query_texts=[query], n_results=max(1, min(int(limit), 10, count)))
+    parts = [f"{meta['path']} (line {meta['line']}):\n{document[:800]}"
+             for meta, document in zip(result["metadatas"][0], result["documents"][0])]
+    return trim("\n\n---\n\n".join(parts) or "Kuch relevant nahi mila.")
+
+
 TOOL_FUNCTIONS = {
     "run_command": run_command,
     "open_app": open_app,
@@ -517,6 +588,10 @@ TOOL_FUNCTIONS.update({
     "setup_repo": setup_repo,
     "take_screenshot": take_screenshot,
     "browse_web": browse_web,
+})
+TOOL_FUNCTIONS.update({
+    "index_codebase": index_codebase,
+    "search_codebase": search_codebase,
 })
 
 
@@ -577,6 +652,14 @@ TOOL_SCHEMAS += [
          "error on screen. Returns the vision model's answer.", {"question": TEXT_SCHEMA}, []),
     tool("browse_web", "Open a web page in a headless browser (JavaScript runs) and return its title and visible text. "
          "Use it to read documentation or check a website.", {"url": TEXT_SCHEMA}, ["url"]),
+]
+TOOL_SCHEMAS += [
+    tool("index_codebase", "Index all code files under a project folder into a local vector database (ChromaDB) "
+         "so they can be searched by meaning. Run it once per project, or again after big changes.",
+         {"folder_path": TEXT_SCHEMA}, ["folder_path"]),
+    tool("search_codebase", "Find the code most related to a question or feature, by meaning, from the indexed "
+         "project. Returns file paths, line numbers and code snippets.",
+         {"query": TEXT_SCHEMA, "limit": {"type": "integer"}}, ["query"]),
 ]
 
 
