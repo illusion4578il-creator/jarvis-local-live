@@ -87,6 +87,11 @@ DEFAULT_SETTINGS = {
     "confirm_destructive": True,
 }
 
+MODEL_CHOICES = [
+    "llama3.1",
+    "huihui_ai/gemma-4-abliterated",
+]
+
 
 def load_settings():
     settings = dict(DEFAULT_SETTINGS)
@@ -884,9 +889,22 @@ class Jarvis:
                               ("SETTINGS", self.open_settings)):
             self.make_button(bar, text, command).pack(side="left", padx=(6, 0))
 
-        self.footer = tk.Label(root, text=f"Model: {SETTINGS['model']}  |  Ollama check ho raha hai...",
+        footer_bar = tk.Frame(root, bg=BG)
+        footer_bar.pack(fill="x", padx=24, pady=(0, 10))
+        self.footer = tk.Label(footer_bar, text=f"Model: {SETTINGS['model']}  |  Ollama check ho raha hai...",
                                font=(FONT, 8), fg=MUTED, bg=BG, anchor="w")
-        self.footer.pack(fill="x", padx=24, pady=(0, 10))
+        self.footer.pack(side="left", fill="x", expand=True)
+        model_choices = list(MODEL_CHOICES)
+        if SETTINGS["model"] not in model_choices:
+            model_choices.append(SETTINGS["model"])
+        self.model_var = tk.StringVar(value=SETTINGS["model"])
+        model_menu = tk.OptionMenu(footer_bar, self.model_var, *model_choices, command=self.switch_model)
+        model_menu.configure(font=(FONT, 9, "bold"), fg=CYAN, bg=PANEL, activeforeground=BG,
+                             activebackground=CYAN, relief="flat", bd=0, highlightthickness=1,
+                             highlightbackground=PANEL_EDGE, cursor="hand2")
+        model_menu["menu"].configure(font=(FONT, 9), fg=TEXT, bg=PANEL, activeforeground=BG,
+                                     activebackground=CYAN)
+        model_menu.pack(side="right", padx=(8, 0))
         root.protocol("WM_DELETE_WINDOW", root.destroy)
 
     def make_button(self, parent, text, command):
@@ -1031,6 +1049,16 @@ class Jarvis:
         except Exception as error:
             self.emit("error", f"Yaad nahi kar paya: {error}")
         self.finish()
+
+    def open_settings(self):
+        win = self.make_dialog("SETTINGS", 520, 880)
+
+    def switch_model(self, model):
+        SETTINGS["model"] = model
+        save_settings(SETTINGS)
+        self.footer.configure(text=f"Model: {model}  |  Ollama check ho raha hai...")
+        threading.Thread(target=self.check_ollama, daemon=True).start()
+        self.emit("info", f"Model switch ho gaya: {model}")
 
     def open_settings(self):
         win = self.make_dialog("SETTINGS", 520, 880)
