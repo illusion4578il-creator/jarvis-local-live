@@ -75,7 +75,7 @@ SYSTEM_PROMPT = (
 )
 
 DEFAULT_SETTINGS = {
-    "model": os.getenv("OLLAMA_MODEL", "llama3.1"),
+    "model": os.getenv("OLLAMA_MODEL", "huihui_ai/gemma-4-abliterated"),
     "ollama_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/"),
     "language": os.getenv("JARVIS_LANGUAGE", "hi-IN"),
     "voice_enabled": True,
