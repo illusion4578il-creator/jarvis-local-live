@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { sdk } from '@/services/sdk';
 import { useFetch } from '@/hooks/useFetch';
 import { useProfile } from '@/hooks/useProfile';
@@ -7,7 +7,7 @@ import { getTableAccess } from '@/services/userPermissions';
 import ApperIcon from '@/components/ApperIcon';
 import { ListSkeleton } from '@/components/PageSkeleton';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -22,10 +22,10 @@ import {
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
   DialogDescription,
-  DialogFooter
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -47,7 +47,7 @@ const SKILL_STATUSES = ['Verified', 'Draft', 'Debugging', 'Deprecated'];
 
 const STATUS_STYLES = {
   Verified: 'bg-success-muted text-success border-success-border',
-  Draft: 'bg-secondary text-secondary-foreground border-border',
+  Draft: 'bg-muted text-muted-foreground border-border',
   Debugging: 'bg-warning-muted text-warning-foreground border-warning-border',
   Deprecated: 'bg-destructive/15 text-destructive border-destructive/30'
 };
@@ -61,6 +61,7 @@ const FIELDS = [
   'run_count_c',
   'script_code_c',
   'description_c',
+  'Owner',
   'CreatedOn',
   'ModifiedOn'
 ];
@@ -70,19 +71,19 @@ const INITIAL_FORM = {
   trigger_phrase_c: '',
   category_c: 'OS Control',
   status_c: 'Verified',
-  run_count_c: 1,
-  script_code_c: '',
+  run_count_c: 0,
+  script_code_c: 'import os, subprocess\n\ndef run():\n    return "Executed custom Jarvis skill"\n\nif __name__ == "__main__":\n    print(run())',
   description_c: ''
 };
 
 export default function SkillsList() {
-  const navigate = useNavigate();
   const { profile } = useProfile();
   const { canCreate } = getTableAccess(profile, 'skills_c');
 
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('run_count_c');
   const [page, setPage] = useState(1);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -91,7 +92,7 @@ export default function SkillsList() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, categoryFilter, statusFilter]);
+  }, [search, categoryFilter, statusFilter, sortBy]);
 
   const { data, loading, error, run } = useFetch(() => {
     const filters = [];
@@ -101,17 +102,24 @@ export default function SkillsList() {
 
     let q = sdk.table('skills_c').select(FIELDS);
     if (filters.length) q = q.where(and(...filters));
+
+    if (sortBy === 'Name') {
+      q = q.orderBy('Name');
+    } else {
+      q = q.orderByDesc(sortBy);
+    }
+
     return q
-      .orderByDesc('run_count_c')
-      .page(page, 10)
+      .page(page, 12)
       .fetch()
       .then((r) => {
         if (!r.success) throw new Error(r.message);
         return { rows: r.data, total: r.total, hasMore: r.hasMore };
       });
-  }, [search, categoryFilter, statusFilter, page]);
+  }, [search, categoryFilter, statusFilter, sortBy, page]);
 
   const rows = data?.rows ?? [];
+  const total = data?.total ?? 0;
   const firstLoad = loading && data === undefined;
 
   async function handleCreate(e) {
@@ -129,7 +137,7 @@ export default function SkillsList() {
         status_c: form.status_c,
         run_count_c: Number(form.run_count_c) || 0,
         script_code_c: form.script_code_c,
-        description_c: form.description_c
+        description_c: form.description_c.trim()
       };
       const res = await sdk.table('skills_c').create(payload);
       if (res.messages?.length) {
@@ -137,7 +145,7 @@ export default function SkillsList() {
         return;
       }
       if (!res.data?.length) return;
-      toast.success('New Python Skill saved to library');
+      toast.success('New Python skill saved to ./skills/ library');
       setCreateOpen(false);
       setForm(INITIAL_FORM);
       run();
@@ -152,11 +160,19 @@ export default function SkillsList() {
         <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h1 className="font-heading text-2xl sm:text-3xl font-bold">
-                Autonomous Python Skill Library
+              <div className="flex items-center gap-2">
+                <Badge className="bg-highlight text-highlight-foreground">
+                  ./skills/ Dynamic Library
+                </Badge>
+                <span className="text-xs text-primary-foreground/80">
+                  Autonomous Python Skill Acquisition
+                </span>
+              </div>
+              <h1 className="mt-2 font-heading text-2xl sm:text-3xl font-bold">
+                Learned Python Skills Library
               </h1>
               <p className="mt-1 text-sm text-primary-foreground/85">
-                Reusable Python scripts written and saved in <code className="bg-primary-foreground/15 px-1.5 py-0.5 rounded text-xs">./skills/</code> when Akash teaches Jarvis a new workflow.
+                Every workflow Akash teaches Jarvis is compiled into a standalone Python module and registered for voice execution.
               </p>
             </div>
             {canCreate && (
@@ -173,79 +189,84 @@ export default function SkillsList() {
       </section>
 
       <div className="mx-auto max-w-7xl px-4 pt-6 sm:px-6 lg:px-8 space-y-6">
-        {/* Filters Toolbar */}
         <Card className="shadow-sm">
-          <CardContent className="p-4 flex flex-col gap-3 md:flex-row md:items-center">
-            <div className="relative flex-1">
-              <ApperIcon
-                name="Search"
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search skill name (e.g. organize_downloads_folder)..."
-                className="pl-9"
-              />
-            </div>
+          <CardContent className="p-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="relative">
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search skill name (e.g. organize_downloads)..."
+                />
+              </div>
 
-            <div className="flex flex-wrap items-center gap-2">
               <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Category" />
+                <SelectTrigger>
+                  <SelectValue placeholder="All Categories" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
-                  {SKILL_CATEGORIES.map((cat) => (
-                    <SelectItem key={cat} value={cat}>
-                      {cat}
+                  {SKILL_CATEGORIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
 
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-36">
-                  <SelectValue placeholder="Status" />
+                <SelectTrigger>
+                  <SelectValue placeholder="All Statuses" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Statuses</SelectItem>
-                  {SKILL_STATUSES.map((st) => (
-                    <SelectItem key={st} value={st}>
-                      {st}
+                  {SKILL_STATUSES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={sortBy} onValueChange={setSortBy}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Sort by" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="run_count_c">Most Executed</SelectItem>
+                  <SelectItem value="CreatedOn">Recently Learned</SelectItem>
+                  <SelectItem value="Name">Alphabetical (A–Z)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </CardContent>
         </Card>
 
-        {/* Data Region */}
         {firstLoad ? (
           <ListSkeleton rows={6} />
         ) : error ? (
           <Card className="border-destructive/40">
             <CardContent className="flex items-center justify-between p-6">
-              <p className="text-sm text-destructive">Failed to load skills: {error}</p>
+              <p className="text-sm text-destructive">{error}</p>
               <Button variant="outline" size="sm" onClick={run}>
                 Retry
               </Button>
             </CardContent>
           </Card>
-        ) : !rows.length ? (
+        ) : rows.length === 0 ? (
           <Card className="shadow-sm">
             <CardContent className="flex flex-col items-center justify-center py-12 text-center space-y-3">
-              <ApperIcon name="Code2" size={32} className="text-muted-foreground" />
-              <p className="text-base font-medium">No learned Python skills match your filters</p>
-              <p className="text-xs text-muted-foreground max-w-md">
-                Teach Jarvis a step-by-step automation task and save the generated Python script into your local skill registry.
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <ApperIcon name="Code2" size={24} />
+              </div>
+              <h2 className="font-heading text-lg font-semibold">No matching Python skills</h2>
+              <p className="text-sm text-muted-foreground max-w-md">
+                Teach Jarvis a step-by-step OS or developer automation task to save it as a reusable Python module.
               </p>
               {canCreate && (
-                <Button size="sm" onClick={() => setCreateOpen(true)}>
-                  <ApperIcon name="Plus" size={15} />
-                  Teach New Skill
+                <Button onClick={() => setCreateOpen(true)}>
+                  <ApperIcon name="Plus" size={16} />
+                  Teach New Python Skill
                 </Button>
               )}
             </CardContent>
@@ -259,49 +280,50 @@ export default function SkillsList() {
             )}
           >
             {rows.map((skill) => (
-              <Card
-                key={skill.Id}
-                onClick={() => navigate(`/skills/${skill.Id}`)}
-                className="cursor-pointer shadow-md hover:border-primary/50 transition-all"
-              >
-                <CardContent className="p-5 space-y-3">
+              <Card key={skill.Id} className="shadow-md hover:border-primary/40 transition-colors">
+                <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
+                    <div>
                       <Link
                         to={`/skills/${skill.Id}`}
-                        onClick={(e) => e.stopPropagation()}
-                        className="font-mono text-base font-bold text-primary hover:underline truncate block"
+                        className="font-mono text-base font-bold text-primary hover:underline"
                       >
                         {skill.Name}.py
                       </Link>
-                      <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
-                        Trigger: “{skill.trigger_phrase_c || 'No voice trigger set'}”
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Trigger: <span className="text-foreground font-medium">“{skill.trigger_phrase_c || '—'}”</span>
                       </p>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center gap-1.5">
                       <Badge variant="outline" className="text-xs">
                         {skill.category_c}
                       </Badge>
                       <Badge
                         variant="outline"
-                        className={cn('text-xs', STATUS_STYLES[skill.status_c])}
+                        className={cn('text-xs', STATUS_STYLES[skill.status_c] || '')}
                       >
                         {skill.status_c}
                       </Badge>
                     </div>
                   </div>
-
-                  <p className="text-xs text-foreground line-clamp-2">{skill.description_c}</p>
-
-                  <pre className="rounded bg-muted/60 p-2.5 text-[11px] font-mono text-muted-foreground overflow-x-auto max-h-24">
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">
+                    {skill.description_c || 'No step-by-step description provided.'}
+                  </p>
+                  <pre className="rounded-md border border-border bg-muted/40 p-2.5 text-xs font-mono text-foreground overflow-x-auto max-h-28">
                     {skill.script_code_c}
                   </pre>
-
-                  <div className="flex items-center justify-between pt-1 text-xs text-muted-foreground border-t border-border">
-                    <span className="font-mono font-medium text-foreground">
-                      Executed {skill.run_count_c ?? 0} times
+                  <div className="flex items-center justify-between pt-1 text-xs text-muted-foreground">
+                    <span>
+                      Executed <strong className="text-foreground">{skill.run_count_c ?? 0}</strong> times · Updated {formatLocalDate(skill.ModifiedOn || skill.CreatedOn, DATE_FORMATS.SHORT)}
                     </span>
-                    <span>Updated {formatLocalDate(skill.ModifiedOn, DATE_FORMATS.SHORT)}</span>
+                    <Button variant="ghost" size="sm" asChild>
+                      <Link to={`/skills/${skill.Id}`}>
+                        Inspect & Run
+                        <ApperIcon name="ArrowRight" size={14} />
+                      </Link>
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -309,49 +331,63 @@ export default function SkillsList() {
           </div>
         )}
 
-        {/* Pagination */}
-        {(page > 1 || data?.hasMore) && (
+        {total > 12 && (
           <div className="flex items-center justify-between pt-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page <= 1 || loading}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              Previous
-            </Button>
-            <span className="text-xs text-muted-foreground">Page {page}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!data?.hasMore || loading}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              Next
-            </Button>
+            <span className="text-xs text-muted-foreground">
+              Page {page} · {total} total skills
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!data?.hasMore}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Create Skill Dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-xl">
           <DialogHeader>
             <DialogTitle className="font-heading">Teach Jarvis a New Python Skill</DialogTitle>
             <DialogDescription>
-              Define the Hinglish voice trigger, instructions, and executable Python code for <code className="text-xs">./skills/</code>.
+              Saves a standalone Python module in ./skills/ and registers its Hinglish voice trigger.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreate} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="skill-name">Skill Name *</Label>
-              <Input
-                id="skill-name"
-                value={form.Name}
-                onChange={(e) => setForm({ ...form, Name: e.target.value })}
-                placeholder="e.g. backup_obsidian_vault"
-                required
-              />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="skill-name">Skill Name (snake_case) *</Label>
+                <Input
+                  id="skill-name"
+                  required
+                  value={form.Name}
+                  onChange={(e) => setForm((f) => ({ ...f, Name: e.target.value }))}
+                  placeholder="backup_coding_projects"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="skill-runs">Execution Count</Label>
+                <Input
+                  id="skill-runs"
+                  type="number"
+                  value={form.run_count_c}
+                  onChange={(e) => setForm((f) => ({ ...f, run_count_c: e.target.value }))}
+                  placeholder="0"
+                />
+              </div>
             </div>
 
             <div className="space-y-1.5">
@@ -359,17 +395,17 @@ export default function SkillsList() {
               <Input
                 id="skill-trigger"
                 value={form.trigger_phrase_c}
-                onChange={(e) => setForm({ ...form, trigger_phrase_c: e.target.value })}
-                placeholder="e.g. Jarvis, mere Obsidian notes ka zip backup bana do"
+                onChange={(e) => setForm((f) => ({ ...f, trigger_phrase_c: e.target.value }))}
+                placeholder="Jarvis, mere saare active coding projects zip karke backup folder mein daalo"
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>Category</Label>
                 <Select
                   value={form.category_c}
-                  onValueChange={(v) => setForm({ ...form, category_c: v })}
+                  onValueChange={(v) => setForm((f) => ({ ...f, category_c: v }))}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -383,12 +419,11 @@ export default function SkillsList() {
                   </SelectContent>
                 </Select>
               </div>
-
               <div className="space-y-1.5">
                 <Label>Status</Label>
                 <Select
                   value={form.status_c}
-                  onValueChange={(v) => setForm({ ...form, status_c: v })}
+                  onValueChange={(v) => setForm((f) => ({ ...f, status_c: v }))}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -402,17 +437,6 @@ export default function SkillsList() {
                   </SelectContent>
                 </Select>
               </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="skill-runs">Execution Count</Label>
-                <Input
-                  id="skill-runs"
-                  type="number"
-                  value={form.run_count_c}
-                  onChange={(e) => setForm({ ...form, run_count_c: e.target.value })}
-                  placeholder="0"
-                />
-              </div>
             </div>
 
             <div className="space-y-1.5">
@@ -421,8 +445,8 @@ export default function SkillsList() {
                 id="skill-desc"
                 rows={2}
                 value={form.description_c}
-                onChange={(e) => setForm({ ...form, description_c: e.target.value })}
-                placeholder="Describe what this skill automates on Akash's PC..."
+                onChange={(e) => setForm((f) => ({ ...f, description_c: e.target.value }))}
+                placeholder="Describe the steps Jarvis performs when this skill is triggered..."
               />
             </div>
 
@@ -433,8 +457,8 @@ export default function SkillsList() {
                 rows={5}
                 className="font-mono text-xs"
                 value={form.script_code_c}
-                onChange={(e) => setForm({ ...form, script_code_c: e.target.value })}
-                placeholder={"import os, subprocess\ndef run():\n    return 'Done'"}
+                onChange={(e) => setForm((f) => ({ ...f, script_code_c: e.target.value }))}
+                placeholder="def run(): ..."
               />
             </div>
 

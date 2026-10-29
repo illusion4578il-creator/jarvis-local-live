@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { sdk } from '@/services/sdk';
 import { useFetch } from '@/hooks/useFetch';
 import { useProfile } from '@/hooks/useProfile';
@@ -7,7 +7,7 @@ import { getTableAccess } from '@/services/userPermissions';
 import ApperIcon from '@/components/ApperIcon';
 import { ListSkeleton } from '@/components/PageSkeleton';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -22,10 +22,10 @@ import {
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
   DialogDescription,
-  DialogFooter
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -34,7 +34,7 @@ import { formatLocalDate, DATE_FORMATS } from '@/utils/date';
 export const route = { path: '/documents', layout: 'owner', access: 'authenticated' };
 export const nav = {
   icon: 'BookOpen',
-  label: 'RAG Books',
+  label: 'RAG Book Vault',
   order: 30,
   profiles: null,
   count: { table: 'documents_c', where: null }
@@ -45,9 +45,9 @@ const { eq, contains, and } = window.ApperSDK.CoreSDK;
 const DOC_TYPES = ['PDF', 'EPUB', 'Markdown', 'TXT'];
 const DOC_STATUSES = ['Indexed', 'Pending', 'Chunking', 'Failed'];
 
-const STATUS_BADGES = {
+const STATUS_BADGE = {
   Indexed: 'bg-success-muted text-success border-success-border',
-  Pending: 'bg-secondary text-secondary-foreground border-border',
+  Pending: 'bg-muted text-muted-foreground border-border',
   Chunking: 'bg-warning-muted text-warning-foreground border-warning-border',
   Failed: 'bg-destructive/15 text-destructive border-destructive/30'
 };
@@ -60,6 +60,7 @@ const FIELDS = [
   'status_c',
   'chunk_count_c',
   'summary_c',
+  'Owner',
   'CreatedOn',
   'ModifiedOn'
 ];
@@ -69,12 +70,11 @@ const INITIAL_FORM = {
   file_path_c: './knowledge_base/',
   doc_type_c: 'PDF',
   status_c: 'Indexed',
-  chunk_count_c: 250,
+  chunk_count_c: 420,
   summary_c: ''
 };
 
 export default function DocumentsList() {
-  const navigate = useNavigate();
   const { profile } = useProfile();
   const { canCreate } = getTableAccess(profile, 'documents_c');
 
@@ -92,16 +92,17 @@ export default function DocumentsList() {
   }, [search, typeFilter, statusFilter]);
 
   const { data, loading, error, run } = useFetch(() => {
-    const f = [];
-    if (search.trim()) f.push(contains('Name', search.trim()));
-    if (typeFilter !== 'all') f.push(eq('doc_type_c', typeFilter));
-    if (statusFilter !== 'all') f.push(eq('status_c', statusFilter));
+    const filters = [];
+    if (search.trim()) filters.push(contains('Name', search.trim()));
+    if (typeFilter !== 'all') filters.push(eq('doc_type_c', typeFilter));
+    if (statusFilter !== 'all') filters.push(eq('status_c', statusFilter));
 
     let q = sdk.table('documents_c').select(FIELDS);
-    if (f.length) q = q.where(and(...f));
+    if (filters.length) q = q.where(and(...filters));
+
     return q
       .orderByDesc('CreatedOn')
-      .page(page, 10)
+      .page(page, 12)
       .fetch()
       .then((r) => {
         if (!r.success) throw new Error(r.message);
@@ -110,6 +111,7 @@ export default function DocumentsList() {
   }, [search, typeFilter, statusFilter, page]);
 
   const rows = data?.rows ?? [];
+  const total = data?.total ?? 0;
   const firstLoad = loading && data === undefined;
 
   async function handleCreate(e) {
@@ -126,14 +128,14 @@ export default function DocumentsList() {
         doc_type_c: form.doc_type_c,
         status_c: form.status_c,
         chunk_count_c: Number(form.chunk_count_c) || 0,
-        summary_c: form.summary_c
+        summary_c: form.summary_c.trim()
       });
       if (res.messages?.length) {
         toast.error(res.messages[0]);
         return;
       }
       if (!res.data?.length) return;
-      toast.success('Book indexed in ChromaDB Knowledge Vault');
+      toast.success('Book ingested into ChromaDB vault');
       setCreateOpen(false);
       setForm(INITIAL_FORM);
       run();
@@ -148,11 +150,19 @@ export default function DocumentsList() {
         <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h1 className="font-heading text-2xl sm:text-3xl font-bold">
-                ChromaDB Knowledge Vault (Books & PDFs)
+              <div className="flex items-center gap-2">
+                <Badge className="bg-highlight text-highlight-foreground">
+                  ChromaDB + all-MiniLM-L6-v2
+                </Badge>
+                <span className="text-xs text-primary-foreground/80">
+                  ./knowledge_base/ Local Vector Store
+                </span>
+              </div>
+              <h1 className="mt-2 font-heading text-2xl sm:text-3xl font-bold">
+                Knowledge Base & Books RAG Vault
               </h1>
               <p className="mt-1 text-sm text-primary-foreground/85">
-                Local books in <code className="bg-primary-foreground/15 px-1.5 py-0.5 rounded text-xs">./knowledge_base/</code> ingested via LangChain Document Loaders and <code className="bg-primary-foreground/15 px-1.5 py-0.5 rounded text-xs">all-MiniLM-L6-v2</code> embeddings.
+                Drop PDFs, EPUBs, and notes into ./knowledge_base for silent retrieval during Hinglish voice calls.
               </p>
             </div>
             {canCreate && (
@@ -160,8 +170,8 @@ export default function DocumentsList() {
                 onClick={() => setCreateOpen(true)}
                 className="bg-highlight text-highlight-foreground hover:bg-highlight/90 font-semibold"
               >
-                <ApperIcon name="Plus" size={16} />
-                Ingest New Book / PDF
+                <ApperIcon name="FilePlus" size={16} />
+                Ingest Book / Document
               </Button>
             )}
           </div>
@@ -170,25 +180,16 @@ export default function DocumentsList() {
 
       <div className="mx-auto max-w-7xl px-4 pt-6 sm:px-6 lg:px-8 space-y-6">
         <Card className="shadow-sm">
-          <CardContent className="p-4 flex flex-col gap-3 md:flex-row md:items-center">
-            <div className="relative flex-1">
-              <ApperIcon
-                name="Search"
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
+          <CardContent className="p-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search book title (e.g. Kleppmann, Fluent Python)..."
-                className="pl-9"
+                placeholder="Search book title or author..."
               />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
               <Select value={typeFilter} onValueChange={setTypeFilter}>
-                <SelectTrigger className="w-36">
-                  <SelectValue placeholder="Format" />
+                <SelectTrigger>
+                  <SelectValue placeholder="All Formats" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Formats</SelectItem>
@@ -199,13 +200,12 @@ export default function DocumentsList() {
                   ))}
                 </SelectContent>
               </Select>
-
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-36">
-                  <SelectValue placeholder="Status" />
+                <SelectTrigger>
+                  <SelectValue placeholder="All Index Statuses" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="all">All Index Statuses</SelectItem>
                   {DOC_STATUSES.map((s) => (
                     <SelectItem key={s} value={s}>
                       {s}
@@ -228,15 +228,20 @@ export default function DocumentsList() {
               </Button>
             </CardContent>
           </Card>
-        ) : !rows.length ? (
-          <Card>
+        ) : rows.length === 0 ? (
+          <Card className="shadow-sm">
             <CardContent className="flex flex-col items-center justify-center py-12 text-center space-y-3">
-              <ApperIcon name="BookOpen" size={32} className="text-muted-foreground" />
-              <p className="text-base font-medium">No books found in ChromaDB vault</p>
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <ApperIcon name="BookOpen" size={24} />
+              </div>
+              <h2 className="font-heading text-lg font-semibold">No books indexed yet</h2>
+              <p className="text-sm text-muted-foreground max-w-md">
+                Add a PDF or EPUB from ./knowledge_base so Jarvis can answer deep analytical questions via ChromaDB.
+              </p>
               {canCreate && (
-                <Button size="sm" onClick={() => setCreateOpen(true)}>
-                  <ApperIcon name="Plus" size={15} />
-                  Ingest First Book
+                <Button onClick={() => setCreateOpen(true)}>
+                  <ApperIcon name="FilePlus" size={16} />
+                  Ingest Book / Document
                 </Button>
               )}
             </CardContent>
@@ -250,22 +255,17 @@ export default function DocumentsList() {
             )}
           >
             {rows.map((doc) => (
-              <Card
-                key={doc.Id}
-                onClick={() => navigate(`/documents/${doc.Id}`)}
-                className="cursor-pointer shadow-md hover:border-primary/50 transition-all"
-              >
-                <CardContent className="p-5 space-y-3">
+              <Card key={doc.Id} className="shadow-md hover:border-primary/40 transition-colors">
+                <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <Link
                         to={`/documents/${doc.Id}`}
-                        onClick={(e) => e.stopPropagation()}
                         className="font-heading text-base font-bold text-foreground hover:text-primary line-clamp-1"
                       >
                         {doc.Name}
                       </Link>
-                      <p className="text-xs font-mono text-muted-foreground mt-0.5 truncate">
+                      <p className="mt-1 font-mono text-xs text-muted-foreground truncate">
                         {doc.file_path_c}
                       </p>
                     </div>
@@ -275,20 +275,27 @@ export default function DocumentsList() {
                       </Badge>
                       <Badge
                         variant="outline"
-                        className={cn('text-xs', STATUS_BADGES[doc.status_c])}
+                        className={cn('text-xs', STATUS_BADGE[doc.status_c] || '')}
                       >
                         {doc.status_c}
                       </Badge>
                     </div>
                   </div>
-
-                  <p className="text-xs text-muted-foreground line-clamp-2">{doc.summary_c}</p>
-
-                  <div className="flex items-center justify-between pt-2 border-t border-border text-xs text-muted-foreground">
-                    <span className="font-mono font-medium text-foreground">
-                      {doc.chunk_count_c ?? 0} ChromaDB chunks
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">
+                    {doc.summary_c || 'No analytical summary recorded.'}
+                  </p>
+                  <div className="flex items-center justify-between pt-1 text-xs text-muted-foreground">
+                    <span>
+                      <strong className="text-foreground">{doc.chunk_count_c ?? 0}</strong> vector chunks · Added {formatLocalDate(doc.CreatedOn, DATE_FORMATS.SHORT)}
                     </span>
-                    <span>Ingested {formatLocalDate(doc.CreatedOn, DATE_FORMATS.SHORT)}</span>
+                    <Button variant="ghost" size="sm" asChild>
+                      <Link to={`/documents/${doc.Id}`}>
+                        Open Book Record
+                        <ApperIcon name="ArrowRight" size={14} />
+                      </Link>
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -296,46 +303,50 @@ export default function DocumentsList() {
           </div>
         )}
 
-        {(page > 1 || data?.hasMore) && (
+        {total > 12 && (
           <div className="flex items-center justify-between pt-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page <= 1 || loading}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              Previous
-            </Button>
-            <span className="text-xs text-muted-foreground">Page {page}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!data?.hasMore || loading}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              Next
-            </Button>
+            <span className="text-xs text-muted-foreground">
+              Page {page} · {total} total documents
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!data?.hasMore}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         )}
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="font-heading">Ingest Local Book into ChromaDB</DialogTitle>
             <DialogDescription>
-              Register a PDF, EPUB, or Markdown book from <code className="text-xs">./knowledge_base/</code>.
+              Registers a PDF, EPUB, or Markdown book from ./knowledge_base into Jarvis’s local vector store.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="doc-title">Document Title *</Label>
+              <Label htmlFor="doc-name">Document Title *</Label>
               <Input
-                id="doc-title"
-                value={form.Name}
-                onChange={(e) => setForm({ ...form, Name: e.target.value })}
-                placeholder="e.g. Deep Learning with PyTorch — Eli Stevens"
+                id="doc-name"
                 required
+                value={form.Name}
+                onChange={(e) => setForm((f) => ({ ...f, Name: e.target.value }))}
+                placeholder="Deep Learning — Ian Goodfellow"
               />
             </div>
 
@@ -344,17 +355,17 @@ export default function DocumentsList() {
               <Input
                 id="doc-path"
                 value={form.file_path_c}
-                onChange={(e) => setForm({ ...form, file_path_c: e.target.value })}
-                placeholder="./knowledge_base/pytorch_dl.pdf"
+                onChange={(e) => setForm((f) => ({ ...f, file_path_c: e.target.value }))}
+                placeholder="./knowledge_base/deep_learning_goodfellow.pdf"
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <Label>Format</Label>
                 <Select
                   value={form.doc_type_c}
-                  onValueChange={(v) => setForm({ ...form, doc_type_c: v })}
+                  onValueChange={(v) => setForm((f) => ({ ...f, doc_type_c: v }))}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -368,12 +379,11 @@ export default function DocumentsList() {
                   </SelectContent>
                 </Select>
               </div>
-
               <div className="space-y-1.5">
                 <Label>Index Status</Label>
                 <Select
                   value={form.status_c}
-                  onValueChange={(v) => setForm({ ...form, status_c: v })}
+                  onValueChange={(v) => setForm((f) => ({ ...f, status_c: v }))}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -387,14 +397,13 @@ export default function DocumentsList() {
                   </SelectContent>
                 </Select>
               </div>
-
               <div className="space-y-1.5">
                 <Label htmlFor="doc-chunks">Vector Chunks</Label>
                 <Input
                   id="doc-chunks"
                   type="number"
                   value={form.chunk_count_c}
-                  onChange={(e) => setForm({ ...form, chunk_count_c: e.target.value })}
+                  onChange={(e) => setForm((f) => ({ ...f, chunk_count_c: e.target.value }))}
                   placeholder="450"
                 />
               </div>
@@ -406,8 +415,8 @@ export default function DocumentsList() {
                 id="doc-summary"
                 rows={3}
                 value={form.summary_c}
-                onChange={(e) => setForm({ ...form, summary_c: e.target.value })}
-                placeholder="Core chapters and concepts Jarvis can retrieve from this book..."
+                onChange={(e) => setForm((f) => ({ ...f, summary_c: e.target.value }))}
+                placeholder="Key chapters, concepts, and formulas indexed for RAG search..."
               />
             </div>
 
@@ -422,7 +431,7 @@ export default function DocumentsList() {
                     Ingesting…
                   </>
                 ) : (
-                  'Save & Index Book'
+                  'Ingest Book'
                 )}
               </Button>
             </DialogFooter>
