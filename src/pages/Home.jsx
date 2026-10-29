@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { sdk } from '@/services/sdk';
 import { useFetch } from '@/hooks/useFetch';
 import ApperIcon from '@/components/ApperIcon';
+import FloatingHudSimulator from '@/components/FloatingHudSimulator';
 import { StatsSkeleton, ListSkeleton } from '@/components/PageSkeleton';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -20,28 +21,28 @@ const { eq } = window.ApperSDK.CoreSDK;
 const PRESET_VOICE_COMMANDS = [
   {
     label: 'Sort Downloads Folder (Skill)',
-    command: 'Jarvis, mera downloads folder clean aur extension wise sort kar do',
+    command: 'Hello Jarvis, mera downloads folder clean aur extension wise sort kar do',
     tool: 'Skill_Runner',
     latency: 590,
     reply: 'On it, Akash. Maine aapka Downloads folder scan karke sabhi PDFs, Archives aur Installers ko clean subfolders mein move kar diya hai.'
   },
   {
     label: 'Ask DDIA Book (ChromaDB RAG)',
-    command: 'Jarvis, Kleppmann book ke hisaab se Raft consensus leader election kaise kaam karta hai?',
+    command: 'Hello Jarvis, Kleppmann book ke hisaab se Raft consensus leader election kaise kaam karta hai?',
     tool: 'RAG_Search',
     latency: 710,
     reply: 'Akash, Designing Data-Intensive Applications ke Chapter 9 ke mutabik Raft mein jab follower ko leader heartbeat nahi milti, toh woh term increment karke candidate ban jata hai aur majority quorum votes maangta hai.'
   },
   {
-    label: 'Auto-Debug OS Script (Hands)',
-    command: 'Jarvis, system ke top 5 memory consuming processes check karke report do',
+    label: 'Uncensored OS Script (Hands)',
+    command: 'Hello Jarvis, system ke top 5 memory consuming processes check karke report do',
     tool: 'OS_Control',
     latency: 660,
-    reply: 'On it, Akash. Maine psutil script run kar li hai. Abhi Ollama server 5.2 GB aur VS Code 1.1 GB RAM use kar rahe hain, baaki system smooth hai.'
+    reply: 'On it, Akash. Maine psutil script run kar li hai. Abhi Ollama llama-3.1-abliterated server 5.4 GB aur VS Code 1.1 GB RAM use kar rahe hain.'
   },
   {
     label: 'Save Fact to Mem0 (Memory)',
-    command: 'Jarvis, yaad rakhna ki raat 10 baje ke baad voice volume 60 percent rakhna hai',
+    command: 'Hello Jarvis, yaad rakhna ki raat 10 baje ke baad voice volume 60 percent rakhna hai',
     tool: 'Memory',
     latency: 530,
     reply: 'Bilkul Akash, maine apni persistent memory store mein yeh rule save kar liya hai ki 10 PM ke baad TTS output gain 60 percent rahega.'
@@ -56,11 +57,15 @@ const STATUS_BADGE_MAP = {
 };
 
 export default function Home() {
+  const [jarvisEnabled, setJarvisEnabled] = useState(true);
+  const [wakeWord, setWakeWord] = useState('Hello Jarvis');
+  const [enforceWakeWord, setEnforceWakeWord] = useState(true);
+
   const [voiceInput, setVoiceInput] = useState('');
   const [simulating, setSimulating] = useState(false);
   const [activeStage, setActiveStage] = useState(null);
   const [lastSpokenReply, setLastSpokenReply] = useState(
-    'Namaste Akash! Main aapka local Jarvis assistant hoon. Silero VAD, Faster-Whisper aur Ollama Qwen 2.5 bilkul ready hain.'
+    'Namaste Akash! Uncensored llama-3.1-8b-instruct-abliterated (Odysseus) aur Floating HUD ready hain.'
   );
 
   const {
@@ -181,14 +186,28 @@ export default function Home() {
   []);
 
   async function handleSimulateVoiceCommand(preset) {
+    if (!jarvisEnabled) {
+      toast.error('Jarvis is OFF! Toggle "Jarvis: ON" in the Floating Desktop GUI controller first.');
+      return;
+    }
+
     const commandText = preset?.command || voiceInput.trim();
     if (!commandText) {
       toast.error('Please enter or select a Hinglish voice command first.');
       return;
     }
 
+    if (
+      enforceWakeWord &&
+      wakeWord.trim() &&
+      !commandText.toLowerCase().includes(wakeWord.trim().toLowerCase())
+    ) {
+      toast.error(`Wake-Word "${wakeWord}" not detected in utterance! Start with "${wakeWord}..."`);
+      return;
+    }
+
     setSimulating(true);
-    setActiveStage('1. Silero VAD: Speech End Detected (32ms frame)');
+    setActiveStage(`1. Silero VAD + Wake-Word "${wakeWord}" Verified (32ms frame)`);
 
     try {
       await new Promise((r) => setTimeout(r, 180));
@@ -203,12 +222,12 @@ export default function Home() {
           ? 'Memory'
           : 'OS_Control');
 
-      setActiveStage(`3. LangChain + Ollama (Qwen2.5-7B) Routing -> ${detectedTool}`);
+      setActiveStage(`3. Uncensored llama-3.1-8b-instruct-abliterated Routing -> ${detectedTool}`);
       await new Promise((r) => setTimeout(r, 240));
 
       const replyText =
         preset?.reply ||
-        `On it, Akash. Maine aapka command "${commandText}" local agent pipeline se execute kar diya hai aur sabhi checks pass ho gaye hain.`;
+        `On it, Akash. Maine aapka command "${commandText}" uncensored local agent pipeline se execute kar diya hai.`;
       const latencyVal = preset?.latency || Math.floor(540 + Math.random() * 240);
 
       setActiveStage(`4. XTTSv2 / Piper Streaming Audio Chunk #1 (${latencyVal}ms latency)`);
@@ -264,17 +283,17 @@ export default function Home() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-highlight px-3 py-1 text-xs font-semibold text-highlight-foreground">
                   <ApperIcon name="Radio" size={13} />
-                  LIVE VOICE CALL INTERFACE · AKASH
+                  UNCENSORED ABLITERATED ENGINE · AKASH
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-foreground/15 px-3 py-1 text-xs font-medium text-primary-foreground">
-                  Ollama Qwen-2.5-7B · Silero VAD · faster-whisper · ChromaDB
+                  llama-3.1-8b-instruct-abliterated · Odysseus · PyQt5 Floating HUD
                 </span>
               </div>
               <h1 className="font-heading text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight">
-                J.A.R.V.I.S. Autonomous Hinglish AI Command Center
+                J.A.R.V.I.S. Uncensored Hinglish AI & Floating HUD Studio
               </h1>
               <p className="text-sm sm:text-base text-primary-foreground/85">
-                100% offline local voice pipeline, autonomous self-debugging OS controller, ChromaDB book knowledge base, and dynamic Python skill acquisition.
+                100% offline uncensored LLM brain, PyQt5 Floating Desktop ON/OFF Mic Kill-Switch, custom Wake-Word gate, and ChromaDB RAG.
               </p>
             </div>
 
@@ -285,7 +304,7 @@ export default function Home() {
               >
                 <Link to="/blueprint">
                   <ApperIcon name="FileCode" size={16} />
-                  Inspect & Download Python Files
+                  Download gui_app.py & Python Code
                 </Link>
               </Button>
               <Button
@@ -304,6 +323,16 @@ export default function Home() {
       </section>
 
       <div className="mx-auto max-w-7xl px-4 pt-6 sm:px-6 lg:px-8 space-y-8">
+        {/* Floating Desktop GUI Controller (ON/OFF Hard Mic Switch + Wake-Word Settings) */}
+        <FloatingHudSimulator
+          jarvisEnabled={jarvisEnabled}
+          onToggleJarvis={setJarvisEnabled}
+          wakeWord={wakeWord}
+          onChangeWakeWord={setWakeWord}
+          enforceWakeWord={enforceWakeWord}
+          onToggleEnforceWakeWord={setEnforceWakeWord}
+        />
+
         {/* Real Aggregate Telemetry Row */}
         {firstMetricsLoad ? (
           <StatsSkeleton count={4} />
@@ -405,11 +434,17 @@ export default function Home() {
                     Real-Time Hinglish Voice Loop Simulator
                   </CardTitle>
                   <CardDescription>
-                    Test how <code className="text-xs bg-muted px-1.5 py-0.5 rounded">voice_loop.py</code> routes Akash’s spoken Hinglish through Silero VAD, faster-whisper, Ollama, and XTTSv2 streaming.
+                    Test how <code className="text-xs bg-muted px-1.5 py-0.5 rounded">voice_loop.py</code> gates on Wake-Word <strong className="text-foreground">“{wakeWord}”</strong> and routes to <code className="text-xs bg-muted px-1.5 py-0.5 rounded">llama-3.1-8b-instruct-abliterated</code>.
                   </CardDescription>
                 </div>
-                <Badge className="bg-success-muted text-success border border-success-border">
-                  VAD Ready
+                <Badge
+                  className={
+                    jarvisEnabled
+                      ? 'bg-success-muted text-success border border-success-border'
+                      : 'bg-destructive/15 text-destructive border border-destructive/30'
+                  }
+                >
+                  {jarvisEnabled ? `Listening: "${wakeWord}"` : 'Mic Dead (OFF)'}
                 </Badge>
               </div>
             </CardHeader>
@@ -442,11 +477,11 @@ export default function Home() {
                 <Input
                   value={voiceInput}
                   onChange={(e) => setVoiceInput(e.target.value)}
-                  placeholder="Speak in Hinglish, e.g. 'Jarvis, Chrome kholo aur DDIA book ka summary batao...'"
-                  disabled={simulating}
+                  placeholder={`${wakeWord}, Chrome kholo aur DDIA book ka summary batao...`}
+                  disabled={simulating || !jarvisEnabled}
                   className="flex-1"
                 />
-                <Button type="submit" disabled={simulating}>
+                <Button type="submit" disabled={simulating || !jarvisEnabled}>
                   {simulating ? (
                     <>
                       <ApperIcon name="LoaderCircle" size={16} className="animate-spin" />
@@ -472,8 +507,13 @@ export default function Home() {
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={simulating}
-                      onClick={() => handleSimulateVoiceCommand(p)}
+                      disabled={simulating || !jarvisEnabled}
+                      onClick={() =>
+                        handleSimulateVoiceCommand({
+                          ...p,
+                          command: p.command.replace(/^Hello Jarvis/i, wakeWord || 'Hello Jarvis')
+                        })
+                      }
                       className="text-xs h-8"
                     >
                       <ApperIcon name="Play" size={12} className="text-primary" />
@@ -549,10 +589,7 @@ export default function Home() {
                   </Button>
                 </div>
               ) : (
-                <div
-                  aria-busy={execsLoading}
-                  className="space-y-3 transition-opacity"
-                >
+                <div aria-busy={execsLoading} className="space-y-3 transition-opacity">
                   {(recentExecs ?? []).map((item) => (
                     <div
                       key={item.Id}
