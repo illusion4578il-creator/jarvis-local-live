@@ -3,8 +3,10 @@
 
 import datetime
 import json
+import math
 import os
 import queue
+import random
 import re
 import shutil
 import subprocess
@@ -13,6 +15,7 @@ import time
 import tkinter as tk
 import webbrowser
 from pathlib import Path
+from tkinter import filedialog, messagebox
 
 import numpy as np
 import psutil
@@ -25,11 +28,9 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
-OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
-LANGUAGE = os.getenv("JARVIS_LANGUAGE", "hi-IN")
 KNOWLEDGE = ROOT / "knowledge"
 ACTION_LOG = ROOT / "jarvis-actions.log"
+SETTINGS_FILE = ROOT / "jarvis-settings.json"
 SAMPLE_RATE = 16000
 OUTPUT_LIMIT = 8000
 SOURCE_LIMIT = 200000
@@ -44,15 +45,44 @@ SYSTEM_PROMPT = (
     "or lists. Reply in the same language the user speaks (Hindi, Hinglish or English)."
 )
 
-BG = "#0B0F17"
-CARD = "#131A26"
-TEXT = "#E5E7EB"
-MUTED = "#8B95A7"
-ORB_IDLE = "#1B2433"
-ORB_IDLE_EDGE = "#3B82F6"
-ORB_LISTEN = "#16A34A"
-ORB_THINK = "#F59E0B"
-ORB_SPEAK = "#3B82F6"
+DEFAULT_SETTINGS = {
+    "model": os.getenv("OLLAMA_MODEL", "llama3.1"),
+    "ollama_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/"),
+    "language": os.getenv("JARVIS_LANGUAGE", "hi-IN"),
+    "voice_enabled": True,
+    "speech_rate": 180,
+    "mic_threshold": 400,
+}
+
+
+def load_settings():
+    settings = dict(DEFAULT_SETTINGS)
+    if SETTINGS_FILE.exists():
+        try:
+            settings.update(json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+        except (ValueError, OSError):
+            pass
+    return settings
+
+
+def save_settings(settings):
+    SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+SETTINGS = load_settings()
+
+BG = "#05080F"
+PANEL = "#0B1422"
+PANEL_EDGE = "#14324A"
+GRID = "#0D1E30"
+TEXT = "#D6F4FF"
+MUTED = "#5B7A90"
+CYAN = "#22D3EE"
+GREEN = "#22C55E"
+AMBER = "#F59E0B"
+MAGENTA = "#E879F9"
+RED = "#F87171"
+FONT = "Consolas"
 
 
 def trim(text, limit=OUTPUT_LIMIT):
@@ -254,37 +284,37 @@ def tool(name, description, properties, required):
             "parameters": {"type": "object", "properties": properties, "required": required}}}
 
 
-TEXT = {"type": "string"}
+TEXT_SCHEMA = {"type": "string"}
 TOOL_SCHEMAS = [
     tool("run_command", "Run a PowerShell (default) or cmd command on the PC and return its output. "
          "Use it for settings, registry, services, networking and anything without a dedicated tool.",
-         {"command": TEXT, "shell": {"type": "string", "enum": ["powershell", "cmd"]}}, ["command"]),
+         {"command": TEXT_SCHEMA, "shell": {"type": "string", "enum": ["powershell", "cmd"]}}, ["command"]),
     tool("open_app", "Open or start an application or .exe, with optional arguments.",
-         {"path": TEXT, "args": {"type": "array", "items": TEXT}}, ["path"]),
-    tool("open_url", "Open a web address in the default browser.", {"url": TEXT}, ["url"]),
+         {"path": TEXT_SCHEMA, "args": {"type": "array", "items": TEXT_SCHEMA}}, ["path"]),
+    tool("open_url", "Open a web address in the default browser.", {"url": TEXT_SCHEMA}, ["url"]),
     tool("open_settings", "Open a Windows Settings page, for example display, sound, network-wifi, "
          "bluetooth, windowsupdate, batterysaver, privacy. Empty page opens the Settings home.",
-         {"page": TEXT}, []),
+         {"page": TEXT_SCHEMA}, []),
     tool("system_info", "Report CPU, RAM, disk, uptime and battery status.", {}, []),
-    tool("list_processes", "List running processes, optionally filtered by name.", {"name_filter": TEXT}, []),
+    tool("list_processes", "List running processes, optionally filtered by name.", {"name_filter": TEXT_SCHEMA}, []),
     tool("kill_process", "Force-close a running process by its name, for example chrome or notepad.",
-         {"name": TEXT}, ["name"]),
+         {"name": TEXT_SCHEMA}, ["name"]),
     tool("power_action", "Lock the screen, sleep, shut down or restart the PC (shutdown and restart wait 30 "
          "seconds), or cancel a pending shutdown.",
          {"action": {"type": "string", "enum": list(POWER_COMMANDS)}}, ["action"]),
-    tool("read_file", "Read a text file from the PC.", {"path": TEXT}, ["path"]),
-    tool("write_file", "Create or overwrite a text file on the PC.", {"path": TEXT, "content": TEXT},
+    tool("read_file", "Read a text file from the PC.", {"path": TEXT_SCHEMA}, ["path"]),
+    tool("write_file", "Create or overwrite a text file on the PC.", {"path": TEXT_SCHEMA, "content": TEXT_SCHEMA},
          ["path", "content"]),
-    tool("list_dir", "List the files and folders in a directory.", {"path": TEXT}, ["path"]),
+    tool("list_dir", "List the files and folders in a directory.", {"path": TEXT_SCHEMA}, ["path"]),
     tool("delete_path", "Delete a file or folder permanently. Only when the user clearly asked.",
-         {"path": TEXT}, ["path"]),
+         {"path": TEXT_SCHEMA}, ["path"]),
     tool("search_files", "Search file and folder names under a directory (default: user home).",
-         {"query": TEXT, "root": TEXT}, ["query"]),
-    tool("learn_from_file", "Read a file the user gave and save it to Jarvis memory.", {"path": TEXT}, ["path"]),
-    tool("learn_from_url", "Fetch a web page (online) and save its text to Jarvis memory.", {"url": TEXT}, ["url"]),
+         {"query": TEXT_SCHEMA, "root": TEXT_SCHEMA}, ["query"]),
+    tool("learn_from_file", "Read a file the user gave and save it to Jarvis memory.", {"path": TEXT_SCHEMA}, ["path"]),
+    tool("learn_from_url", "Fetch a web page (online) and save its text to Jarvis memory.", {"url": TEXT_SCHEMA}, ["url"]),
     tool("save_knowledge", "Save a note or fact the user taught to Jarvis memory.",
-         {"title": TEXT, "text": TEXT}, ["title", "text"]),
-    tool("recall", "Search Jarvis memory for saved knowledge relevant to a query.", {"query": TEXT}, ["query"]),
+         {"title": TEXT_SCHEMA, "text": TEXT_SCHEMA}, ["title", "text"]),
+    tool("recall", "Search Jarvis memory for saved knowledge relevant to a query.", {"query": TEXT_SCHEMA}, ["query"]),
 ]
 
 
@@ -305,8 +335,8 @@ def log_action(name, args, result):
 
 
 def ask_model(messages):
-    response = requests.post(f"{OLLAMA_URL}/api/chat", json={
-        "model": MODEL, "messages": messages, "tools": TOOL_SCHEMAS, "stream": False,
+    response = requests.post(f"{SETTINGS['ollama_url']}/api/chat", json={
+        "model": SETTINGS["model"], "messages": messages, "tools": TOOL_SCHEMAS, "stream": False,
     }, timeout=600)
     response.raise_for_status()
     return response.json()["message"]
@@ -347,15 +377,19 @@ def trim_history(messages):
         del messages[1:len(messages) - MAX_HISTORY]
 
 
-def record_utterance(stop_event, max_seconds=15.0, silence_seconds=1.2, threshold=400):
+def record_utterance(stop_event, on_level=None, max_seconds=15.0, silence_seconds=1.2):
     block = SAMPLE_RATE // 10
+    threshold = SETTINGS["mic_threshold"]
     frames, heard, silent_for = [], False, 0.0
     started = time.time()
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=block) as stream:
         while not stop_event.is_set() and time.time() - started < max_seconds:
             data, _ = stream.read(block)
             frames.append(data.copy())
-            if float(np.abs(data).mean()) > threshold:
+            level = float(np.abs(data).mean())
+            if on_level:
+                on_level(min(1.0, level / 3000))
+            if level > threshold:
                 heard, silent_for = True, 0.0
             elif heard:
                 silent_for += 0.1
@@ -369,7 +403,7 @@ def record_utterance(stop_event, max_seconds=15.0, silence_seconds=1.2, threshol
 def transcribe(recognizer, raw):
     audio = sr.AudioData(raw, SAMPLE_RATE, 2)
     try:
-        return recognizer.recognize_google(audio, language=LANGUAGE).strip()
+        return recognizer.recognize_google(audio, language=SETTINGS["language"]).strip()
     except sr.UnknownValueError:
         return ""
 
@@ -378,11 +412,13 @@ SPEECH_LOCK = threading.Lock()
 
 
 def speak(text):
+    if not SETTINGS["voice_enabled"]:
+        return
     spoken = re.sub(r"[*_`#>|]+", " ", text)[:SPEECH_LIMIT]
     with SPEECH_LOCK:
         try:
             engine = pyttsx3.init()
-            engine.setProperty("rate", 180)
+            engine.setProperty("rate", int(SETTINGS["speech_rate"]))
             engine.say(spoken)
             engine.runAndWait()
             engine.stop()
@@ -390,11 +426,11 @@ def speak(text):
             pass
 
 
-STATE_STYLE = {
-    "idle": ("Ready. Mic dabaiye aur bolein.", ORB_IDLE, "MIC"),
-    "listening": ("Sun raha hoon... rokne ke liye dobara dabaiye.", ORB_LISTEN, "SUN RAHA"),
-    "thinking": ("Soch raha hoon...", ORB_THINK, "SOCH RAHA"),
-    "speaking": ("Bol raha hoon...", ORB_SPEAK, "BOL RAHA"),
+STATE_INFO = {
+    "idle": ("STANDBY", "Mic dabaiye ya type karein.", CYAN),
+    "listening": ("LISTENING", "Sun raha hoon... rokne ke liye MIC dobara dabaiye.", GREEN),
+    "thinking": ("PROCESSING", "Soch raha hoon...", AMBER),
+    "speaking": ("RESPONDING", "Bol raha hoon...", MAGENTA),
 }
 
 
@@ -407,70 +443,92 @@ class Jarvis:
         self.stop_listening = threading.Event()
         self.busy = False
         self.state = "idle"
+        self.level = 0.0
+        self.amp = 0.05
+        self.tick = 0
         self.build_ui()
         threading.Thread(target=self.check_ollama, daemon=True).start()
-        self.root.after(60, self.poll)
+        self.root.after(50, self.poll)
+        self.root.after(40, self.animate)
 
     def build_ui(self):
         root = self.root
-        root.title("Jarvis")
-        root.geometry("460x660")
-        root.minsize(400, 580)
+        root.title("J.A.R.V.I.S.")
+        root.geometry("980x760")
+        root.minsize(800, 660)
         root.configure(bg=BG)
 
-        tk.Label(root, text="JARVIS", font=("Segoe UI", 22, "bold"), fg=TEXT, bg=BG).pack(pady=(22, 0))
-        self.status = tk.Label(root, text=STATE_STYLE["idle"][0], font=("Segoe UI", 10), fg=MUTED, bg=BG)
-        self.status.pack(pady=(2, 14))
+        header = tk.Frame(root, bg=BG)
+        header.pack(fill="x", padx=24, pady=(18, 0))
+        tk.Label(header, text="J . A . R . V . I . S", font=(FONT, 20, "bold"), fg=CYAN,
+                 bg=BG).pack(side="left")
+        self.mode_label = tk.Label(header, text="STANDBY", font=(FONT, 10, "bold"), fg=CYAN, bg=BG)
+        self.mode_label.pack(side="right")
+        self.dot = tk.Canvas(header, width=12, height=12, bg=BG, highlightthickness=0)
+        self.dot.pack(side="right", padx=(0, 8))
+        self.dot_item = self.dot.create_oval(2, 2, 10, 10, fill=CYAN, outline="")
 
-        self.orb = tk.Canvas(root, width=200, height=200, bg=BG, highlightthickness=0, cursor="hand2")
-        self.orb.pack()
-        self.orb_ring = self.orb.create_oval(14, 14, 186, 186, fill=ORB_IDLE, outline=ORB_IDLE_EDGE, width=3)
-        self.orb_label = self.orb.create_text(100, 100, text="MIC", fill=TEXT, font=("Segoe UI", 13, "bold"))
-        self.orb.bind("<Button-1>", lambda _event: self.toggle_listen())
+        self.wave = tk.Canvas(root, height=200, bg=PANEL, highlightthickness=1,
+                              highlightbackground=PANEL_EDGE)
+        self.wave.pack(fill="x", padx=24, pady=(14, 0))
 
-        panel = tk.Frame(root, bg=CARD)
-        panel.pack(fill="both", expand=True, padx=20, pady=(16, 8))
-        tk.Label(panel, text="AAPNE", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=CARD,
-                 anchor="w").pack(fill="x", padx=18, pady=(14, 0))
-        self.user_text = tk.Label(panel, text="-", font=("Segoe UI", 12), fg=TEXT, bg=CARD,
-                                  wraplength=360, justify="left", anchor="w")
-        self.user_text.pack(fill="x", padx=18, pady=(2, 14))
-        tk.Label(panel, text="JARVIS", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=CARD,
-                 anchor="w").pack(fill="x", padx=18)
-        self.reply_text = tk.Label(panel, text="Namaste! Mic dabaiye aur kuch bhi poochiye ya karwaiye.",
-                                   font=("Segoe UI", 12), fg=TEXT, bg=CARD, wraplength=360,
-                                   justify="left", anchor="w")
-        self.reply_text.pack(fill="x", padx=18, pady=(2, 16))
+        self.hint = tk.Label(root, text=STATE_INFO["idle"][1], font=(FONT, 10), fg=MUTED, bg=BG,
+                             anchor="w")
+        self.hint.pack(fill="x", padx=26, pady=(8, 0))
 
-        bottom = tk.Frame(root, bg=BG)
-        bottom.pack(fill="x", padx=20, pady=(0, 6))
-        self.entry = tk.Entry(bottom, font=("Segoe UI", 11), bg=CARD, fg=TEXT,
-                              insertbackground=TEXT, relief="flat")
-        self.entry.pack(side="left", fill="x", expand=True, ipady=7)
+        chat_frame = tk.Frame(root, bg=PANEL, highlightthickness=1, highlightbackground=PANEL_EDGE)
+        chat_frame.pack(fill="both", expand=True, padx=24, pady=(10, 12))
+        self.chat = tk.Text(chat_frame, bg=PANEL, fg=TEXT, font=(FONT, 11), wrap="word",
+                            relief="flat", padx=18, pady=14, highlightthickness=0, borderwidth=0,
+                            state="disabled", cursor="arrow")
+        self.chat.pack(fill="both", expand=True)
+        self.chat.tag_configure("you", foreground=CYAN, font=(FONT, 9, "bold"))
+        self.chat.tag_configure("jarvis", foreground=GREEN, font=(FONT, 9, "bold"))
+        self.chat.tag_configure("tool", foreground=AMBER, font=(FONT, 9, "bold"))
+        self.chat.tag_configure("error", foreground=RED, font=(FONT, 9, "bold"))
+        self.chat.tag_configure("info", foreground=MUTED, font=(FONT, 9, "bold"))
+        self.chat.tag_configure("body", foreground=TEXT)
+        self.chat.tag_configure("muted", foreground=MUTED, font=(FONT, 10))
+        self.add_line("SYSTEM", "Namaste! Mic dabaiye aur kuch bhi poochiye, karwaiye ya sikhaiye.", "info", "muted")
+
+        bar = tk.Frame(root, bg=BG)
+        bar.pack(fill="x", padx=24, pady=(0, 8))
+        self.entry = tk.Entry(bar, font=(FONT, 11), bg=PANEL, fg=TEXT, insertbackground=CYAN,
+                              relief="flat", highlightthickness=1, highlightbackground=PANEL_EDGE,
+                              highlightcolor=CYAN)
+        self.entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 6))
         self.entry.bind("<Return>", self.on_text)
+        for text, command in (("SEND", self.on_text), ("MIC", self.toggle_listen),
+                              ("UPLOAD", self.upload_file), ("TEACH", self.open_teach),
+                              ("SETTINGS", self.open_settings)):
+            self.make_button(bar, text, command).pack(side="left", padx=(6, 0))
 
-        self.footer = tk.Label(root, text=f"Model: {MODEL}  |  Ollama check ho raha hai...",
-                               font=("Segoe UI", 8), fg=MUTED, bg=BG, anchor="w")
-        self.footer.pack(fill="x", padx=20, pady=(0, 10))
-
-        root.bind("<Configure>", self.on_resize)
+        self.footer = tk.Label(root, text=f"Model: {SETTINGS['model']}  |  Ollama check ho raha hai...",
+                               font=(FONT, 8), fg=MUTED, bg=BG, anchor="w")
+        self.footer.pack(fill="x", padx=24, pady=(0, 10))
         root.protocol("WM_DELETE_WINDOW", root.destroy)
 
-    def on_resize(self, event):
-        if event.widget is self.root:
-            wrap = max(240, event.width - 100)
-            self.user_text.configure(wraplength=wrap)
-            self.reply_text.configure(wraplength=wrap)
+    def make_button(self, parent, text, command):
+        return tk.Button(parent, text=text, command=command, font=(FONT, 9, "bold"), fg=CYAN, bg=PANEL,
+                         activeforeground=BG, activebackground=CYAN, relief="flat", bd=0, padx=12, pady=8,
+                         cursor="hand2", highlightthickness=1, highlightbackground=PANEL_EDGE)
+
+    def add_line(self, label, body, label_tag, body_tag):
+        self.chat.configure(state="normal")
+        self.chat.insert("end", f"{label}\n", label_tag)
+        self.chat.insert("end", f"{body}\n\n", body_tag)
+        self.chat.configure(state="disabled")
+        self.chat.see("end")
 
     def emit(self, kind, value):
         self.events.put((kind, value))
 
     def check_ollama(self):
         try:
-            requests.get(f"{OLLAMA_URL}/api/version", timeout=2).raise_for_status()
-            text = f"Model: {MODEL}  |  Ollama connected"
+            requests.get(f"{SETTINGS['ollama_url']}/api/version", timeout=2).raise_for_status()
+            text = f"Model: {SETTINGS['model']}  |  Ollama connected"
         except requests.RequestException:
-            text = f"Model: {MODEL}  |  Ollama band hai, Ollama app kholiye"
+            text = f"Model: {SETTINGS['model']}  |  Ollama band hai, Ollama app kholiye"
         self.emit("footer", text)
 
     def toggle_listen(self):
@@ -483,7 +541,10 @@ class Jarvis:
 
     def on_text(self, _event=None):
         text = self.entry.get().strip()
-        if not text or self.busy:
+        if not text:
+            return
+        if self.busy:
+            messagebox.showinfo("Jarvis", "Jarvis abhi kaam kar raha hai, thodi der baad poochiye.")
             return
         self.entry.delete(0, "end")
         self.start(self.text_turn, text)
@@ -495,7 +556,7 @@ class Jarvis:
     def voice_turn(self):
         self.emit("state", "listening")
         try:
-            raw = record_utterance(self.stop_listening)
+            raw = record_utterance(self.stop_listening, lambda level: self.emit("level", level))
         except Exception as error:
             self.emit("error", f"Mic nahi chal raha: {error}")
             return self.finish()
@@ -519,6 +580,125 @@ class Jarvis:
         self.respond(text)
         self.finish()
 
+    def upload_file(self):
+        if self.busy:
+            messagebox.showinfo("Jarvis", "Jarvis abhi kaam kar raha hai, thodi der baad try kijiye.")
+            return
+        path = filedialog.askopenfilename(
+            title="Jarvis ko file sikhayein",
+            filetypes=[("Text aur code files", "*.txt *.md *.py *.js *.jsx *.json *.csv *.log *.html *.css"),
+                       ("Sab files", "*.*")])
+        if path:
+            self.start(self.learn_file_turn, path)
+
+    def learn_file_turn(self, path):
+        self.emit("state", "thinking")
+        try:
+            result = learn_from_file(path)
+            self.emit("info", f"{Path(path).name} sikh li. {result}.")
+            speak("File sikh li hai.")
+        except Exception as error:
+            self.emit("error", f"File sikh nahi paayi: {error}")
+        self.finish()
+
+    def open_teach(self):
+        if self.busy:
+            messagebox.showinfo("Jarvis", "Jarvis abhi kaam kar raha hai, thodi der baad try kijiye.")
+            return
+        win = self.make_dialog("JARVIS KO SIKHAYEIN", 560, 460)
+        tk.Label(win, text="TOPIC / TITLE", font=(FONT, 9, "bold"), fg=CYAN, bg=BG,
+                 anchor="w").pack(fill="x", padx=22, pady=(18, 4))
+        title_entry = tk.Entry(win, font=(FONT, 11), bg=PANEL, fg=TEXT, insertbackground=CYAN,
+                               relief="flat", highlightthickness=1, highlightbackground=PANEL_EDGE)
+        title_entry.pack(fill="x", padx=22, ipady=6)
+        tk.Label(win, text="JO SIKHANA HAI", font=(FONT, 9, "bold"), fg=CYAN, bg=BG,
+                 anchor="w").pack(fill="x", padx=22, pady=(14, 4))
+        body = tk.Text(win, height=10, font=(FONT, 10), bg=PANEL, fg=TEXT, insertbackground=CYAN,
+                       relief="flat", wrap="word", highlightthickness=1, highlightbackground=PANEL_EDGE)
+        body.pack(fill="both", expand=True, padx=22)
+
+        def save():
+            title = title_entry.get().strip()
+            text = body.get("1.0", "end").strip()
+            if not title or not text:
+                messagebox.showwarning("Jarvis", "Title aur text dono likhiye.", parent=win)
+                return
+            win.destroy()
+            self.start(self.teach_turn, title, text)
+
+        buttons = tk.Frame(win, bg=BG)
+        buttons.pack(fill="x", padx=22, pady=16)
+        self.make_button(buttons, "SAVE", save).pack(side="right")
+        self.make_button(buttons, "CANCEL", win.destroy).pack(side="right", padx=(0, 8))
+
+    def teach_turn(self, title, text):
+        self.emit("state", "thinking")
+        try:
+            result = save_knowledge(title, text)
+            self.emit("info", f"Yaad kar liya: {title}. {result}.")
+            speak("Theek hai, yaad kar liya.")
+        except Exception as error:
+            self.emit("error", f"Yaad nahi kar paya: {error}")
+        self.finish()
+
+    def open_settings(self):
+        win = self.make_dialog("SETTINGS", 520, 620)
+        fields = {}
+        for key, label in (("model", "OLLAMA MODEL"), ("ollama_url", "OLLAMA URL"),
+                           ("language", "BOLNE KI LANGUAGE (hi-IN, en-IN, en-US)")):
+            tk.Label(win, text=label, font=(FONT, 9, "bold"), fg=CYAN, bg=BG,
+                     anchor="w").pack(fill="x", padx=22, pady=(14, 4))
+            entry = tk.Entry(win, font=(FONT, 11), bg=PANEL, fg=TEXT, insertbackground=CYAN,
+                             relief="flat", highlightthickness=1, highlightbackground=PANEL_EDGE)
+            entry.insert(0, str(SETTINGS[key]))
+            entry.pack(fill="x", padx=22, ipady=6)
+            fields[key] = entry
+
+        voice_var = tk.BooleanVar(value=bool(SETTINGS["voice_enabled"]))
+        tk.Checkbutton(win, text="Jarvis bolkar jawab de (voice output)", variable=voice_var,
+                       font=(FONT, 10), fg=TEXT, bg=BG, selectcolor=PANEL, activebackground=BG,
+                       activeforeground=TEXT).pack(anchor="w", padx=22, pady=(18, 0))
+        rate_var = tk.IntVar(value=int(SETTINGS["speech_rate"]))
+        tk.Label(win, text="BOLNE KI SPEED", font=(FONT, 9, "bold"), fg=CYAN, bg=BG,
+                 anchor="w").pack(fill="x", padx=22, pady=(14, 0))
+        tk.Scale(win, from_=120, to=260, orient="horizontal", variable=rate_var, bg=BG, fg=TEXT,
+                 troughcolor=PANEL, highlightthickness=0, activebackground=CYAN).pack(fill="x", padx=22)
+        threshold_var = tk.IntVar(value=int(SETTINGS["mic_threshold"]))
+        tk.Label(win, text="MIC SENSITIVITY (kam value = zyada sensitive)", font=(FONT, 9, "bold"), fg=CYAN,
+                 bg=BG, anchor="w").pack(fill="x", padx=22, pady=(14, 0))
+        tk.Scale(win, from_=100, to=1500, orient="horizontal", variable=threshold_var, bg=BG, fg=TEXT,
+                 troughcolor=PANEL, highlightthickness=0, activebackground=CYAN).pack(fill="x", padx=22)
+
+        def save():
+            for key, entry in fields.items():
+                value = entry.get().strip()
+                if not value:
+                    messagebox.showwarning("Jarvis", "Khaali field nahi chal sakti.", parent=win)
+                    return
+                SETTINGS[key] = value.rstrip("/") if key == "ollama_url" else value
+            SETTINGS["voice_enabled"] = bool(voice_var.get())
+            SETTINGS["speech_rate"] = int(rate_var.get())
+            SETTINGS["mic_threshold"] = int(threshold_var.get())
+            save_settings(SETTINGS)
+            win.destroy()
+            self.footer.configure(text=f"Model: {SETTINGS['model']}  |  Ollama check ho raha hai...")
+            threading.Thread(target=self.check_ollama, daemon=True).start()
+
+        buttons = tk.Frame(win, bg=BG)
+        buttons.pack(fill="x", padx=22, pady=18, side="bottom")
+        self.make_button(buttons, "SAVE", save).pack(side="right")
+        self.make_button(buttons, "CANCEL", win.destroy).pack(side="right", padx=(0, 8))
+
+    def make_dialog(self, title, width, height):
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.geometry(f"{width}x{height}")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.grab_set()
+        tk.Label(win, text=title, font=(FONT, 14, "bold"), fg=CYAN, bg=BG).pack(anchor="w", padx=22, pady=(18, 0))
+        return win
+
     def respond(self, text):
         self.emit("user", text)
         self.messages.append({"role": "user", "content": text})
@@ -529,7 +709,8 @@ class Jarvis:
             speak(error)
             return
         self.emit("answer", reply)
-        self.emit("state", "speaking")
+        if SETTINGS["voice_enabled"]:
+            self.emit("state", "speaking")
         speak(reply)
 
     def finish(self):
@@ -538,10 +719,45 @@ class Jarvis:
 
     def set_state(self, state):
         self.state = state
-        text, color, label = STATE_STYLE[state]
-        self.orb.itemconfigure(self.orb_ring, fill=color)
-        self.orb.itemconfigure(self.orb_label, text=label)
-        self.status.configure(text=text)
+        mode, hint, color = STATE_INFO[state]
+        self.mode_label.configure(text=mode, fg=color)
+        self.dot.itemconfigure(self.dot_item, fill=color)
+        self.hint.configure(text=hint)
+
+    def animate(self):
+        self.tick += 1
+        if self.state != "listening":
+            self.level = 0.0
+        canvas = self.wave
+        width = max(canvas.winfo_width(), 200)
+        height = max(canvas.winfo_height(), 120)
+        t = self.tick * 0.12
+        if self.state == "listening":
+            target = 0.08 + min(1.0, self.level * 3.0) * random.uniform(0.7, 1.1)
+        elif self.state == "thinking":
+            target = 0.18 + 0.1 * math.sin(t * 2)
+        elif self.state == "speaking":
+            target = 0.45 + 0.25 * math.sin(t * 3)
+        else:
+            target = 0.06 + 0.03 * math.sin(t)
+        self.amp += (target - self.amp) * 0.35
+        color = STATE_INFO[self.state][2]
+        canvas.delete("all")
+        for x in range(0, width, 40):
+            canvas.create_line(x, 0, x, height, fill=GRID)
+        for y in range(0, height, 30):
+            canvas.create_line(0, y, width, y, fill=GRID)
+        mid = height / 2
+        count = max(24, width // 16)
+        step = width / count
+        speed = 3 if self.state == "speaking" else 1.5
+        for i in range(count):
+            wobble = 0.5 + 0.5 * math.sin(i * 0.45 + t * speed)
+            jitter = random.uniform(0.85, 1.15) if self.state in ("listening", "speaking") else 1.0
+            half = max(2.0, self.amp * wobble * jitter * mid * 0.9)
+            x = i * step + step / 2
+            canvas.create_rectangle(x - 2, mid - half, x + 2, mid + half, fill=color, outline="")
+        self.root.after(40, self.animate)
 
     def poll(self):
         while True:
@@ -551,19 +767,25 @@ class Jarvis:
                 break
             if kind == "state":
                 self.set_state(value)
+            elif kind == "level":
+                self.level = value
             elif kind == "user":
-                self.user_text.configure(text=value)
+                self.add_line("YOU", value, "you", "body")
+            elif kind == "answer":
+                self.add_line("JARVIS", value, "jarvis", "body")
             elif kind == "tool":
-                self.status.configure(text=f"Kaam kar raha hoon: {value}")
-            elif kind in ("answer", "error", "info"):
-                self.reply_text.configure(text=value)
+                self.add_line("TOOL", value, "tool", "muted")
+            elif kind == "error":
+                self.add_line("ERROR", value, "error", "body")
+            elif kind == "info":
+                self.add_line("SYSTEM", value, "info", "muted")
             elif kind == "footer":
                 self.footer.configure(text=value)
             elif kind == "done":
                 self.busy = False
                 self.set_state("idle")
                 self.entry.focus_set()
-        self.root.after(60, self.poll)
+        self.root.after(50, self.poll)
 
 
 def main():
