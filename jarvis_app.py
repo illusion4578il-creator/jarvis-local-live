@@ -464,6 +464,21 @@ def transcribe(recognizer, raw):
         return ""
 
 
+def check_mic():
+    try:
+        device = sd.query_devices(kind="input")
+    except Exception as error:
+        return False, f"Mic device nahi mila: {error}"
+    if not device or device.get("max_input_channels", 0) < 1:
+        return False, "Mic device nahi mila"
+    try:
+        with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=SAMPLE_RATE // 10):
+            pass
+    except Exception as error:
+        return False, f"Mic chalu nahi ho paa raha (permission ya device check karein): {error}"
+    return True, f"Mic ready: {device.get('name', 'input device')}"
+
+
 SPEECH_LOCK = threading.Lock()
 
 
@@ -498,6 +513,7 @@ class Jarvis:
         self.recognizer = sr.Recognizer()
         self.stop_listening = threading.Event()
         self.cancel = threading.Event()
+        self.mic_ready = False
         self.busy = False
         self.state = "idle"
         self.level = 0.0
@@ -505,6 +521,7 @@ class Jarvis:
         self.tick = 0
         self.build_ui()
         threading.Thread(target=self.check_ollama, daemon=True).start()
+        threading.Thread(target=self.check_mic_status, daemon=True).start()
         self.root.after(50, self.poll)
         self.root.after(40, self.animate)
 
@@ -595,10 +612,19 @@ class Jarvis:
             text = f"Model: {SETTINGS['model']}  |  Ollama band hai, Ollama app kholiye"
         self.emit("footer", text)
 
+    def check_mic_status(self):
+        ok, text = check_mic()
+        self.mic_ready = ok
+        self.emit("info", text if ok else f"{text}. Abhi sirf text se baat ho sakti hai.")
+
     def toggle_listen(self):
         if self.busy:
             if self.state == "listening":
                 self.stop_listening.set()
+            return
+        if not self.mic_ready:
+            threading.Thread(target=self.check_mic_status, daemon=True).start()
+            self.emit("info", "Mic abhi ready nahi hai. Mic check ho raha hai, text se poochiye.")
             return
         self.stop_listening.clear()
         self.start(self.voice_turn)
