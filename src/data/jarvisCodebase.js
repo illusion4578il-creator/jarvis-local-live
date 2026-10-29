@@ -11,10 +11,10 @@ export const CODEBASE_FILES = [
     title: '1. Folder Structure',
     filename: 'PROJECT_STRUCTURE.txt',
     language: 'text',
-    description: 'Complete local directory layout including gui_app.py (Floating Desktop GUI) and Uncensored Odysseus/Ollama config.',
+    description: 'Complete local directory layout including gui_app.py (Floating Desktop GUI with Glowing Waveform Visualizer) and Uncensored Odysseus/Ollama config.',
     content: `jarvis_assistant/
-├── gui_app.py                 # NEW: Floating Desktop HUD (PyQt5) with "Jarvis: ON/OFF" Hard Mic Switch & Custom Wake-Word
-├── voice_loop.py              # Real-Time Voice Pipeline (Hard Mic Gating + Wake-Word Detector + Silero VAD + Faster-Whisper + XTTSv2)
+├── gui_app.py                 # UPGRADED: PyQt5 Floating HUD with Real-Time Glowing Voice Waveform Bar + ON/OFF Switch + Wake-Word
+├── voice_loop.py              # UPGRADED: Streams real-time Mic RMS & TTS Audio Envelope levels to the HUD Waveform Visualizer
 ├── agent.py                   # Uncensored Brain: LangChain + Ollama (llama-3.1-8b-instruct-abliterated) + Odysseus Bridge
 ├── tools.py                   # OS Controller (Self-Debugging), ChromaDB Book RAG, Memory & Dynamic Skill Learner
 ├── requirements.txt           # All 100% local Python libraries including PyQt5 for Floating Desktop HUD
@@ -45,7 +45,7 @@ langchain-ollama==0.2.0
 langchain-huggingface==0.1.2
 langchain-chroma==0.1.4
 
-# Floating Desktop HUD GUI (On/Off Switch & Wake-Word Config)
+# Floating Desktop HUD GUI (On/Off Switch, Glowing Waveform & Wake-Word Config)
 PyQt5==5.15.11
 
 # Local Voice Pipeline (Silero VAD + Faster-Whisper STT + Streaming TTS)
@@ -78,13 +78,22 @@ python-dotenv==1.0.1`
   },
   {
     id: 'gui_app',
-    title: '3. Floating Desktop GUI (gui_app.py)',
+    title: '3. Floating Desktop GUI + Waveform (gui_app.py)',
     filename: 'gui_app.py',
     language: 'python',
-    description: 'Modern, frameless, draggable PyQt5 Floating HUD with "Jarvis: ON / OFF" hard mic switch and live Wake-Word customization.',
+    description: 'Upgraded PyQt5 Floating HUD featuring a 30 FPS QPainter Glowing Voice Waveform Visualizer that reacts to both Akash Mic Volume (Cyan/Emerald) and Jarvis TTS Output (Indigo/Amber).',
     content: `import sys
-from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QObject
-from PyQt5.QtGui import QFont, QColor
+import math
+import random
+from PyQt5.QtCore import Qt, QPoint, QTimer, QRectF, pyqtSignal, QObject
+from PyQt5.QtGui import (
+    QFont,
+    QColor,
+    QPainter,
+    QLinearGradient,
+    QPen,
+    QBrush
+)
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -103,14 +112,135 @@ from voice_loop import JarvisVoicePipeline
 class UiBridge(QObject):
     status_signal = pyqtSignal(str)
     transcript_signal = pyqtSignal(str)
+    level_signal = pyqtSignal(float, str)  # (rms_level 0.0..1.0, source: 'mic' | 'tts' | 'idle' | 'off')
+
+
+class VoiceWaveformVisualizer(QWidget):
+    """
+    Real-Time 28-Bar Glowing Audio Waveform Visualizer rendered via QPainter at 30 FPS.
+    - 'off' mode: Flat slate bars (Mic completely dead).
+    - 'mic' mode: Glowing Cyan -> Emerald gradient reacting to Akash's live microphone RMS volume.
+    - 'tts' mode: Glowing Indigo -> Amber gradient reacting to Jarvis's XTTSv2/Piper audio output.
+    - 'idle' mode: Subtle breathing wave while Silero VAD listens for the Wake-Word.
+    """
+    def __init__(self, num_bars=28, parent=None):
+        super().__init__(parent)
+        self.num_bars = num_bars
+        self.bar_values = [0.06] * num_bars
+        self.target_level = 0.0
+        self.mode = "off"  # 'off' | 'idle' | 'mic' | 'tts'
+        self.phase = 0.0
+        self.setFixedHeight(64)
+
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._tick_waveform)
+        self.anim_timer.start(33)  # ~30 FPS smooth animation
+
+    def set_audio_state(self, level: float, mode: str):
+        self.target_level = max(0.0, min(1.0, float(level)))
+        self.mode = mode
+
+    def _tick_waveform(self):
+        self.phase += 0.28
+        mid = self.num_bars / 2.0
+
+        for i in range(self.num_bars):
+            center_weight = 1.0 - (abs(i - mid) / mid) * 0.55
+
+            if self.mode == "off":
+                target = 0.06
+            elif self.mode == "idle":
+                target = 0.10 + 0.05 * math.sin(self.phase + i * 0.4) * center_weight
+            else:
+                harmonic = (
+                    0.55 * abs(math.sin(self.phase * 1.6 + i * 0.45))
+                    + 0.45 * abs(math.cos(self.phase * 1.1 - i * 0.3))
+                )
+                jitter = random.uniform(0.85, 1.15)
+                target = max(0.10, min(1.0, self.target_level * harmonic * center_weight * jitter))
+
+            # Smooth exponential interpolation for responsive rise and natural decay
+            smoothing = 0.45 if target > self.bar_values[i] else 0.22
+            self.bar_values[i] += (target - self.bar_values[i]) * smoothing
+
+        # Decay target level slightly between audio callbacks
+        self.target_level *= 0.88
+        if self.mode in ("mic", "tts") and self.target_level < 0.03:
+            self.mode = "idle"
+
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+
+        # Dark recessed visualizer housing
+        painter.setPen(QPen(QColor("#1e293b"), 1))
+        painter.setBrush(QBrush(QColor("#0b0f19")))
+        painter.drawRoundedRect(QRectF(0, 0, w, h), 8.0, 8.0)
+
+        padding_x = 12.0
+        usable_w = w - padding_x * 2
+        slot_w = usable_w / self.num_bars
+        bar_w = max(3.0, slot_w * 0.58)
+        center_y = h / 2.0
+        max_bar_h = h - 14.0
+
+        for i, val in enumerate(self.bar_values):
+            bar_h = max(4.0, val * max_bar_h)
+            x = padding_x + i * slot_w + (slot_w - bar_w) / 2.0
+            y = center_y - bar_h / 2.0
+
+            grad = QLinearGradient(x, y, x, y + bar_h)
+            if self.mode == "off":
+                grad.setColorAt(0.0, QColor("#334155"))
+                grad.setColorAt(1.0, QColor("#1e293b"))
+                glow_color = None
+            elif self.mode == "tts":
+                # Jarvis Speaking: Radiant Amber -> Indigo Glow
+                grad.setColorAt(0.0, QColor("#fbbf24"))
+                grad.setColorAt(0.5, QColor("#f59e0b"))
+                grad.setColorAt(1.0, QColor("#6366f1"))
+                glow_color = QColor(245, 158, 11, 95)
+            elif self.mode == "mic":
+                # Akash Speaking: Electric Cyan -> Emerald Glow
+                grad.setColorAt(0.0, QColor("#22d3ee"))
+                grad.setColorAt(0.5, QColor("#10b981"))
+                grad.setColorAt(1.0, QColor("#059669"))
+                glow_color = QColor(16, 185, 129, 95)
+            else:
+                # Idle Armed: Soft Indigo Pulse
+                grad.setColorAt(0.0, QColor("#818cf8"))
+                grad.setColorAt(1.0, QColor("#4f46e5"))
+                glow_color = QColor(99, 102, 241, 45)
+
+            # Outer neon halo glow when active
+            if glow_color and val > 0.14:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(glow_color))
+                painter.drawRoundedRect(
+                    QRectF(x - 1.5, y - 2.0, bar_w + 3.0, bar_h + 4.0),
+                    bar_w / 2.0,
+                    bar_w / 2.0
+                )
+
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(grad))
+            painter.drawRoundedRect(
+                QRectF(x, y, bar_w, bar_h),
+                bar_w / 2.0,
+                bar_w / 2.0
+            )
 
 
 class JarvisFloatingHUD(QWidget):
     """
     Small, modern, always-on-top floating Desktop GUI for Akash.
-    - Prominent 'Jarvis: ON / OFF' toggle button.
-    - When OFF: Microphone hardware stream is completely closed (dead).
-    - When ON: Enters the Silero VAD + faster-whisper listening loop.
+    - Real-time glowing voice waveform visualizer bar (Mic RMS + Jarvis TTS output).
+    - Prominent 'Jarvis: ON / OFF' toggle button (Hard Mic Kill-Switch).
     - Live customizable Wake-Word input (e.g., 'Hello Jarvis', 'System Online').
     """
     def __init__(self):
@@ -118,10 +248,12 @@ class JarvisFloatingHUD(QWidget):
         self.bridge = UiBridge()
         self.bridge.status_signal.connect(self.update_status_label)
         self.bridge.transcript_signal.connect(self.update_transcript_label)
+        self.bridge.level_signal.connect(self.update_waveform_level)
 
         self.pipeline = JarvisVoicePipeline(
             on_status_change=self.bridge.status_signal.emit,
-            on_transcript=self.bridge.transcript_signal.emit
+            on_transcript=self.bridge.transcript_signal.emit,
+            on_audio_level=self.bridge.level_signal.emit
         )
         self.is_jarvis_on = False
         self.drag_pos = QPoint()
@@ -129,14 +261,14 @@ class JarvisFloatingHUD(QWidget):
 
     def _init_ui(self):
         self.setWindowTitle("J.A.R.V.I.S. Local HUD")
-        self.setFixedSize(370, 250)
+        self.setFixedSize(380, 325)
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         container = QFrame(self)
-        container.setGeometry(10, 10, 350, 230)
+        container.setGeometry(10, 10, 360, 305)
         container.setStyleSheet("""
             QFrame {
                 background-color: #111625;
@@ -184,11 +316,15 @@ class JarvisFloatingHUD(QWidget):
         top_bar.addWidget(close_btn)
         layout.addLayout(top_bar)
 
+        # Real-Time Glowing Voice Waveform Visualizer Bar
+        self.waveform = VoiceWaveformVisualizer(num_bars=28, parent=container)
+        layout.addWidget(self.waveform)
+
         # Prominent Jarvis: ON / OFF Toggle Button
-        self.toggle_btn = QPushButton("Jarvis: OFF (Mic Dead)")
-        self.toggle_btn.setFixedHeight(48)
+        self.toggle_btn = QPushButton("🔴 Jarvis: OFF (Mic Dead)")
+        self.toggle_btn.setFixedHeight(46)
         self.toggle_btn.setCursor(Qt.PointingHandCursor)
-        self.toggle_btn.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        self.toggle_btn.setFont(QFont("Segoe UI", 11, QFont.Bold))
         self._apply_toggle_style(False)
         self.toggle_btn.clicked.connect(self.toggle_jarvis_state)
         layout.addWidget(self.toggle_btn)
@@ -233,7 +369,7 @@ class JarvisFloatingHUD(QWidget):
         self.status_lbl.setStyleSheet("color: #94a3b8; border: none;")
         layout.addWidget(self.status_lbl)
 
-        self.transcript_lbl = QLabel("Toggle 'Jarvis: ON' to arm Silero VAD listening loop.")
+        self.transcript_lbl = QLabel("Toggle 'Jarvis: ON' to arm Silero VAD & live waveform.")
         self.transcript_lbl.setFont(QFont("Segoe UI", 8))
         self.transcript_lbl.setWordWrap(True)
         self.transcript_lbl.setStyleSheet("color: #fbbf24; border: none;")
@@ -271,10 +407,18 @@ class JarvisFloatingHUD(QWidget):
         self.is_jarvis_on = not self.is_jarvis_on
         self._apply_toggle_style(self.is_jarvis_on)
         if self.is_jarvis_on:
+            self.waveform.set_audio_state(0.15, "idle")
             self.pipeline.update_wake_word(self.wake_input.text().strip())
             self.pipeline.start_listening()
         else:
             self.pipeline.stop_listening()
+            self.waveform.set_audio_state(0.0, "off")
+
+    def update_waveform_level(self, level: float, source: str):
+        if not self.is_jarvis_on:
+            self.waveform.set_audio_state(0.0, "off")
+            return
+        self.waveform.set_audio_state(level, source)
 
     def update_wake_word(self, text: str):
         self.pipeline.update_wake_word(text.strip())
@@ -314,7 +458,7 @@ if __name__ == "__main__":
     title: '4. The Voice Loop (voice_loop.py)',
     filename: 'voice_loop.py',
     language: 'python',
-    description: 'Hardware Mic ON/OFF Kill-Switch + Customizable Wake-Word Gate + Silero VAD + faster-whisper + Streaming TTS.',
+    description: 'Hardware Mic ON/OFF Kill-Switch + Real-Time Mic RMS & TTS Output Envelope Streaming to the PyQt5 Waveform Visualizer.',
     content: `import os
 import re
 import time
@@ -336,9 +480,10 @@ MIN_SPEECH_SEC = 0.35
 class LocalStreamingTTS:
     """
     Sentence-level chunked TTS streamer supporting Coqui XTTSv2 (multilingual Hinglish)
-    with ultra-fast Piper / system fallback so first-sentence latency stays < 1 second.
+    that also emits real-time 24kHz audio envelope levels to drive the HUD waveform visualizer.
     """
-    def __init__(self):
+    def __init__(self, on_audio_level=None):
+        self.on_audio_level = on_audio_level or (lambda lvl, src: None)
         self.audio_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.is_speaking = False
@@ -369,12 +514,26 @@ class LocalStreamingTTS:
                 break
         sd.stop()
         self.is_speaking = False
+        self.on_audio_level(0.0, "idle")
 
     def enqueue_sentence(self, sentence: str):
         clean = re.sub(r"[\\*\\#\\\`\\_\\~\\[\\]]+", "", sentence).strip()
         if clean:
             self.stop_event.clear()
             self.audio_queue.put(clean)
+
+    def _stream_tts_envelope(self, wav_np: np.ndarray, samplerate: int = 24000):
+        """Slices playback audio into 40ms windows and pushes RMS amplitude to the GUI waveform."""
+        step = int(samplerate * 0.04)
+        for idx in range(0, len(wav_np), step):
+            if self.stop_event.is_set() or not self.is_speaking:
+                break
+            window = wav_np[idx:idx + step]
+            if len(window) > 0:
+                rms = float(np.sqrt(np.mean(window ** 2)))
+                scaled = min(1.0, rms * 6.5)
+                self.on_audio_level(scaled, "tts")
+            time.sleep(0.038)
 
     def _playback_worker(self):
         ref_wav = os.path.join("voices", "jarvis_reference.wav")
@@ -392,19 +551,34 @@ class LocalStreamingTTS:
                     )
                     wav_np = np.array(wav, dtype=np.float32)
                     sd.play(wav_np, samplerate=24000)
+                    env_thread = threading.Thread(
+                        target=self._stream_tts_envelope,
+                        args=(wav_np, 24000),
+                        daemon=True
+                    )
+                    env_thread.start()
                     sd.wait()
                 else:
                     print(f"\\n[JARVIS VOICE]: {sentence}")
+                    # Simulate envelope pulses for console/Piper fallback
+                    words = max(4, len(sentence.split()))
+                    for _ in range(words * 2):
+                        if self.stop_event.is_set():
+                            break
+                        self.on_audio_level(0.65, "tts")
+                        time.sleep(0.06)
             except Exception as err:
                 print(f"[TTS Playback Error]: {err}")
             finally:
                 self.is_speaking = False
+                self.on_audio_level(0.1, "idle")
 
 
 class JarvisVoicePipeline:
-    def __init__(self, on_status_change=None, on_transcript=None):
+    def __init__(self, on_status_change=None, on_transcript=None, on_audio_level=None):
         self.on_status_change = on_status_change or (lambda s: print(f"[STATUS] {s}"))
         self.on_transcript = on_transcript or (lambda t: None)
+        self.on_audio_level = on_audio_level or (lambda lvl, src: None)
         self.is_active = False
         self.listen_thread = None
         self.wake_word = os.getenv("JARVIS_WAKE_WORD", "Hello Jarvis")
@@ -422,7 +596,7 @@ class JarvisVoicePipeline:
         whisper_size = os.getenv("WHISPER_MODEL_SIZE", "medium")
         print(f"[INIT] Loading faster-whisper ({whisper_size}) on {device} ({compute_type})...")
         self.stt_model = WhisperModel(whisper_size, device=device, compute_type=compute_type)
-        self.tts = LocalStreamingTTS()
+        self.tts = LocalStreamingTTS(on_audio_level=self.on_audio_level)
 
     def update_wake_word(self, new_wake_word: str):
         self.wake_word = new_wake_word.strip()
@@ -441,6 +615,7 @@ class JarvisVoicePipeline:
         """Called when GUI toggle is switched OFF. Closes sd.InputStream so mic is 100% dead."""
         self.is_active = False
         self.tts.interrupt()
+        self.on_audio_level(0.0, "off")
         self.on_status_change("OFF · Mic Completely Dead")
         self.on_transcript("Microphone hardware stream closed.")
 
@@ -509,13 +684,20 @@ class JarvisVoicePipeline:
         is_recording = False
         silence_start = None
 
-        # Context manager opens mic ONLY while self.is_active is True.
-        # As soon as self.is_active becomes False, the with-block exits and hardware mic is closed.
         with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=CHUNK_SAMPLES) as stream:
             while self.is_active:
                 chunk, _ = stream.read(CHUNK_SAMPLES)
-                tensor_chunk = torch.from_numpy(chunk.flatten())
+                flat = chunk.flatten()
+                tensor_chunk = torch.from_numpy(flat)
                 speech_prob = self.vad_model(tensor_chunk, SAMPLE_RATE).item()
+
+                # Compute real-time mic RMS and emit to HUD Waveform Visualizer when not playing TTS
+                rms = float(np.sqrt(np.mean(flat ** 2)))
+                if not self.tts.is_speaking:
+                    if speech_prob >= VAD_THRESHOLD:
+                        self.on_audio_level(min(1.0, rms * 12.0 + speech_prob * 0.35), "mic")
+                    else:
+                        self.on_audio_level(min(0.22, rms * 5.0), "idle")
 
                 if speech_prob >= VAD_THRESHOLD:
                     if self.tts.is_speaking:
@@ -545,7 +727,6 @@ class JarvisVoicePipeline:
 
 
 if __name__ == "__main__":
-    # Launch headless or via gui_app.py
     pipeline = JarvisVoicePipeline()
     pipeline.start_listening()
     try:
@@ -583,7 +764,6 @@ JARVIS_SYSTEM_PROMPT = """You are an advanced, autonomous personal AI assistant 
 4. If asked about facts or books, silently use your RAG tool to read your database before answering.
 5. Be highly intelligent, calm, efficient, and friendly."""
 
-# Default to uncensored Llama-3.1-8B-Instruct-Abliterated on local Ollama (used by Odysseus & Jarvis)
 OLLAMA_MODEL = os.getenv(
     "OLLAMA_MODEL",
     "llama-3.1-8b-instruct-abliterated"
@@ -635,10 +815,6 @@ def warmup_agent():
 
 
 def stream_jarvis_response(user_text: str) -> Generator[str, None, None]:
-    """
-    Streams spoken Hinglish sentences back to voice_loop.py.
-    If an OS or Skill tool is invoked, immediately yields 'On it, Akash. ' so TTS begins under 500ms.
-    """
     global CHAT_HISTORY
     memory_context = get_persistent_memories_summary()
     lower_q = user_text.lower()
@@ -753,10 +929,7 @@ def query_knowledge_books(question: str) -> str:
 
 @tool
 def execute_os_command_with_autodebug(task_description: str, python_code: str) -> str:
-    """
-    Executes unrestricted Python/OS automation code on Akash's PC.
-    If execution fails, autonomously reads the traceback, rewrites the code up to 3 times using the abliterated model, and retries.
-    """
+    """Executes unrestricted Python/OS automation code on Akash's PC with up to 3 autonomous self-debug retries."""
     coder_llm = ChatOllama(
         model=os.getenv("OLLAMA_MODEL", "llama-3.1-8b-instruct-abliterated"),
         temperature=0.1
@@ -860,8 +1033,8 @@ def remember_or_recall_memory(action: str, fact_or_query: str) -> str:
     title: '7. Odysseus + Abliterated Setup Guide',
     filename: 'SETUP_INSTRUCTIONS.md',
     language: 'markdown',
-    description: 'Step-by-step guide to configure Odysseus + Uncensored Llama-3.1-8B-Instruct-Abliterated on Ollama and launch the Floating Desktop GUI.',
-    content: `# Step-by-Step Uncensored Setup Guide (Odysseus + Ollama + Floating GUI)
+    description: 'Step-by-step guide to configure Odysseus + Uncensored Llama-3.1-8B-Instruct-Abliterated on Ollama and launch the Floating Desktop GUI with Live Waveform.',
+    content: `# Step-by-Step Uncensored Setup Guide (Odysseus + Ollama + Floating Waveform GUI)
 
 ## Step 1: Pull Uncensored Llama-3.1-8B-Instruct-Abliterated in Ollama
 Run the following commands to pull the abliterated (uncensored, zero-refusal) Llama 3.1 8B model and alias it as \`llama-3.1-8b-instruct-abliterated\`:
@@ -891,11 +1064,11 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 \`\`\`
 
-## Step 4: Launch the Floating Desktop GUI (On/Off Switch & Wake-Word)
+## Step 4: Launch the Floating Desktop GUI with Real-Time Voice Waveform
 \`\`\`bash
 python gui_app.py
 \`\`\`
-- When **Jarvis: OFF** is active (default on startup), the microphone hardware stream is **completely dead**.
-- Click **Jarvis: ON** to arm Silero VAD and listen for your customizable Wake-Word (e.g. \`"Hello Jarvis"\` or \`"System Online"\`).`
+- **When Jarvis: OFF (Red):** Microphone stream is completely closed and the 28-bar waveform is locked flat.
+- **When Jarvis: ON (Green):** Silero VAD arms the mic; speaking lights up the waveform in **Glowing Cyan-Emerald**, and Jarvis's TTS response pulses the waveform in **Glowing Amber-Indigo**.`
   }
 ];

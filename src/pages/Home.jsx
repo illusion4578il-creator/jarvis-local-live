@@ -60,12 +60,13 @@ export default function Home() {
   const [jarvisEnabled, setJarvisEnabled] = useState(true);
   const [wakeWord, setWakeWord] = useState('Hello Jarvis');
   const [enforceWakeWord, setEnforceWakeWord] = useState(true);
+  const [visualizerSource, setVisualizerSource] = useState('idle');
 
   const [voiceInput, setVoiceInput] = useState('');
   const [simulating, setSimulating] = useState(false);
   const [activeStage, setActiveStage] = useState(null);
   const [lastSpokenReply, setLastSpokenReply] = useState(
-    'Namaste Akash! Uncensored llama-3.1-8b-instruct-abliterated (Odysseus) aur Floating HUD ready hain.'
+    'Namaste Akash! Uncensored llama-3.1-8b-instruct-abliterated (Odysseus) aur Live Waveform HUD ready hain.'
   );
 
   const {
@@ -181,8 +182,7 @@ export default function Home() {
       .fetch()
       .then((r) => {
         if (!r.success) throw new Error(r.message);
-        return r.data;
-      }),
+        return r.data;\n      }),
   []);
 
   async function handleSimulateVoiceCommand(preset) {
@@ -207,12 +207,13 @@ export default function Home() {
     }
 
     setSimulating(true);
-    setActiveStage(`1. Silero VAD + Wake-Word "${wakeWord}" Verified (32ms frame)`);
+    setVisualizerSource('mic');
+    setActiveStage(`1. Silero VAD + Mic RMS Waveform Active · Wake-Word "${wakeWord}" Verified`);
 
     try {
-      await new Promise((r) => setTimeout(r, 180));
+      await new Promise((r) => setTimeout(r, 320));
       setActiveStage('2. faster-whisper (Medium CUDA): Transcribing Hinglish Audio...');
-      await new Promise((r) => setTimeout(r, 220));
+      await new Promise((r) => setTimeout(r, 260));
 
       const detectedTool =
         preset?.tool ||
@@ -230,7 +231,8 @@ export default function Home() {
         `On it, Akash. Maine aapka command "${commandText}" uncensored local agent pipeline se execute kar diya hai.`;
       const latencyVal = preset?.latency || Math.floor(540 + Math.random() * 240);
 
-      setActiveStage(`4. XTTSv2 / Piper Streaming Audio Chunk #1 (${latencyVal}ms latency)`);
+      setVisualizerSource('tts');
+      setActiveStage(`4. XTTSv2 Streaming 24kHz Audio Envelope -> HUD Waveform (${latencyVal}ms latency)`);
 
       const res = await sdk.table('executions_c').create({
         Name: commandText,
@@ -255,17 +257,20 @@ export default function Home() {
             const utter = new SpeechSynthesisUtterance(replyText);
             utter.lang = 'hi-IN';
             utter.rate = 1.05;
+            utter.onend = () => setVisualizerSource('idle');
             window.speechSynthesis.speak(utter);
           } catch {
             // ignore browser TTS restrictions
           }
         }
+        await new Promise((r) => setTimeout(r, 1400));
         refetchExecs();
         refreshMetrics();
       }
     } finally {
       setSimulating(false);
       setActiveStage(null);
+      setTimeout(() => setVisualizerSource('idle'), 900);
     }
   }
 
@@ -286,14 +291,14 @@ export default function Home() {
                   UNCENSORED ABLITERATED ENGINE · AKASH
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-foreground/15 px-3 py-1 text-xs font-medium text-primary-foreground">
-                  llama-3.1-8b-instruct-abliterated · Odysseus · PyQt5 Floating HUD
+                  llama-3.1-8b-instruct-abliterated · PyQt5 Live Waveform HUD
                 </span>
               </div>
               <h1 className="font-heading text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight">
-                J.A.R.V.I.S. Uncensored Hinglish AI & Floating HUD Studio
+                J.A.R.V.I.S. Uncensored Hinglish AI & Live Waveform HUD Studio
               </h1>
               <p className="text-sm sm:text-base text-primary-foreground/85">
-                100% offline uncensored LLM brain, PyQt5 Floating Desktop ON/OFF Mic Kill-Switch, custom Wake-Word gate, and ChromaDB RAG.
+                100% offline uncensored LLM brain, PyQt5 Floating Desktop HUD with 30 FPS glowing voice waveform bar, hard Mic Kill-Switch, and ChromaDB RAG.
               </p>
             </div>
 
@@ -304,7 +309,7 @@ export default function Home() {
               >
                 <Link to="/blueprint">
                   <ApperIcon name="FileCode" size={16} />
-                  Download gui_app.py & Python Code
+                  Download Upgraded gui_app.py
                 </Link>
               </Button>
               <Button
@@ -323,7 +328,7 @@ export default function Home() {
       </section>
 
       <div className="mx-auto max-w-7xl px-4 pt-6 sm:px-6 lg:px-8 space-y-8">
-        {/* Floating Desktop GUI Controller (ON/OFF Hard Mic Switch + Wake-Word Settings) */}
+        {/* Floating Desktop GUI Controller (Waveform Visualizer + ON/OFF Hard Mic Switch + Wake-Word) */}
         <FloatingHudSimulator
           jarvisEnabled={jarvisEnabled}
           onToggleJarvis={setJarvisEnabled}
@@ -331,6 +336,8 @@ export default function Home() {
           onChangeWakeWord={setWakeWord}
           enforceWakeWord={enforceWakeWord}
           onToggleEnforceWakeWord={setEnforceWakeWord}
+          visualizerSource={visualizerSource}
+          isSimulating={simulating}
         />
 
         {/* Real Aggregate Telemetry Row */}
@@ -434,7 +441,7 @@ export default function Home() {
                     Real-Time Hinglish Voice Loop Simulator
                   </CardTitle>
                   <CardDescription>
-                    Test how <code className="text-xs bg-muted px-1.5 py-0.5 rounded">voice_loop.py</code> gates on Wake-Word <strong className="text-foreground">“{wakeWord}”</strong> and routes to <code className="text-xs bg-muted px-1.5 py-0.5 rounded">llama-3.1-8b-instruct-abliterated</code>.
+                    Test how <code className="text-xs bg-muted px-1.5 py-0.5 rounded">voice_loop.py</code> drives the HUD waveform in Cyan (Mic) and Amber (Jarvis TTS).
                   </CardDescription>
                 </div>
                 <Badge
@@ -498,7 +505,7 @@ export default function Home() {
 
               <div className="space-y-2">
                 <p className="text-xs font-medium text-muted-foreground">
-                  Quick Hinglish Voice Triggers (click to execute & log):
+                  Quick Hinglish Voice Triggers (click to watch Mic → TTS Waveform transition):
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {PRESET_VOICE_COMMANDS.map((p, idx) => (
@@ -605,8 +612,7 @@ export default function Home() {
                         <div className="flex items-center gap-2">
                           <Badge variant="outline" className="text-[11px]">
                             {item.tool_used_c}
-                          </Badge>
-                          <Badge
+                          </Badge>\n                          <Badge
                             variant="outline"
                             className={`text-[11px] ${STATUS_BADGE_MAP[item.status_c] || ''}`}
                           >
