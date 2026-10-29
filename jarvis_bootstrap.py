@@ -40,6 +40,11 @@ def ollama_running():
         return False
 
 
+def gui_python(python):
+    windowed = python.with_name("pythonw.exe")
+    return windowed if sys.platform == "win32" and windowed.is_file() else python
+
+
 def main():
     if not REQUIREMENTS.is_file():
         print("requirements.txt nahi mili. Poori Jarvis folder download karein.")
@@ -47,7 +52,7 @@ def main():
     python = ensure_venv()
     if not ollama_running():
         print("Ollama chal nahi raha. Ollama app kholiye ya 'ollama serve' chalaiye. Jarvis phir bhi khul raha hai.")
-    return subprocess.call([str(python), str(ROOT / "jarvis.py")], cwd=ROOT)
+    return subprocess.call([str(gui_python(python)), str(ROOT / "jarvis.py")], cwd=ROOT)
 
 
 if __name__ == "__main__":

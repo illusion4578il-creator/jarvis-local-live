@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 import requests
@@ -173,7 +174,122 @@ def parse_arguments(raw):
         return {}
 
 
-def main():
+def run_turn(messages, emit):
+    for _ in range(12):
+        try:
+            message = ask_model(messages)
+        except requests.RequestException as error:
+            emit("error", f"Ollama se connect nahi ho paa raha ({error}). Ollama app kholiye ya 'ollama serve' chalaiye.")
+            return
+        messages.append(message)
+        calls = message.get("tool_calls") or []
+        if not calls:
+            emit("answer", message.get("content", ""))
+            return
+        for call in calls:
+            function = call.get("function", {})
+            name = function.get("name", "")
+            args = parse_arguments(function.get("arguments"))
+            emit("tool", name)
+            result = execute(name, args)
+            log_action(name, args, result)
+            messages.append({"role": "tool", "content": result})
+    emit("error", "Kaam bahut lamba ho gaya. Chhota sawaal poochiye.")
+
+
+def ollama_online():
+    try:
+        requests.get(f"{OLLAMA_URL}/api/version", timeout=2).raise_for_status()
+        return True
+    except requests.RequestException:
+        return False
+
+
+def run_gui():
+    import tkinter as tk
+    from tkinter import scrolledtext
+
+    root = tk.Tk()
+    root.title(f"Jarvis ({MODEL})")
+    root.geometry("800x640")
+    root.minsize(520, 400)
+    font = ("Segoe UI", 11)
+
+    chat = scrolledtext.ScrolledText(root, wrap="word", font=font, state="disabled", padx=10, pady=10)
+    chat.pack(fill="both", expand=True, padx=12, pady=(12, 6))
+    chat.tag_config("you", font=("Segoe UI", 11, "bold"))
+    chat.tag_config("jarvis", font=("Segoe UI", 11, "bold"), foreground="#16A34A")
+    chat.tag_config("tool", font=("Segoe UI", 9, "italic"), foreground="#6B7280")
+
+    bottom = tk.Frame(root)
+    bottom.pack(fill="x", padx=12, pady=(0, 6))
+    entry = tk.Entry(bottom, font=font)
+    entry.pack(side="left", fill="x", expand=True, ipady=6)
+    send_button = tk.Button(bottom, text="Bhejein", width=10)
+    send_button.pack(side="left", padx=(8, 0))
+    status = tk.Label(root, anchor="w")
+    status.pack(fill="x", padx=12, pady=(0, 8))
+
+    events = queue.Queue()
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    busy = {"value": False}
+
+    def write(who, text, tag):
+        chat.configure(state="normal")
+        chat.insert("end", f"{who}: ", tag)
+        chat.insert("end", f"{text}\n\n")
+        chat.see("end")
+        chat.configure(state="disabled")
+
+    def worker(text):
+        messages.append({"role": "user", "content": text})
+        run_turn(messages, lambda kind, value: events.put((kind, value)))
+        events.put(("done", ""))
+
+    def send(_event=None):
+        text = entry.get().strip()
+        if not text or busy["value"]:
+            return
+        entry.delete(0, "end")
+        write("You", text, "you")
+        busy["value"] = True
+        send_button.configure(state="disabled")
+        status.configure(text="Jarvis soch raha hai...")
+        threading.Thread(target=worker, args=(text,), daemon=True).start()
+
+    def poll():
+        while True:
+            try:
+                kind, value = events.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "tool":
+                status.configure(text=f"Kaam kar raha hoon: {value}")
+                write("  tool", value, "tool")
+            elif kind in ("answer", "error"):
+                write("Jarvis", value, "jarvis")
+            elif kind == "done":
+                busy["value"] = False
+                send_button.configure(state="normal")
+                status.configure(text="Ready")
+                entry.focus_set()
+        root.after(100, poll)
+
+    if ollama_online():
+        status.configure(text=f"Ollama connected - model: {MODEL}")
+    else:
+        status.configure(text="Ollama band hai - Ollama app kholiye ya 'ollama serve' chalaiye")
+    write("Jarvis", "Namaste! Main Jarvis hoon. PC ke kaam, files, programs, ya kuch naya seekhna - bas likhiye.", "jarvis")
+
+    entry.bind("<Return>", send)
+    send_button.configure(command=send)
+    root.protocol("WM_DELETE_WINDOW", root.destroy)
+    entry.focus_set()
+    root.after(100, poll)
+    root.mainloop()
+
+
+def run_terminal():
     print(f"Jarvis ready (model: {MODEL}). Likhiye aur Enter dabaiye. 'exit' se band karein.")
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     while True:
@@ -186,27 +302,23 @@ def main():
         if not user_text:
             continue
         messages.append({"role": "user", "content": user_text})
-        for _ in range(12):
-            try:
-                message = ask_model(messages)
-            except requests.RequestException as error:
-                print(f"\nOllama se connect nahi ho paa raha ({error}). 'ollama serve' chalu karke phir try karein.")
-                break
-            messages.append(message)
-            calls = message.get("tool_calls") or []
-            if not calls:
-                print(f"\nJarvis: {message.get('content', '')}")
-                break
-            for call in calls:
-                function = call.get("function", {})
-                name = function.get("name", "")
-                args = parse_arguments(function.get("arguments"))
-                print(f"  [tool] {name}")
-                result = execute(name, args)
-                log_action(name, args, result)
-                messages.append({"role": "tool", "content": result})
-        else:
-            print("Jarvis: Kaam bahut lamba ho gaya. Chhota sawaal poochiye.")
+        run_turn(messages, print_event)
+
+
+def print_event(kind, value):
+    if kind == "tool":
+        print(f"  [tool] {value}")
+    else:
+        print(f"\nJarvis: {value}")
+
+
+def main():
+    try:
+        import tkinter  # noqa: F401
+    except ImportError:
+        run_terminal()
+        return
+    run_gui()
 
 
 if __name__ == "__main__":
