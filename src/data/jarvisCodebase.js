@@ -1098,7 +1098,7 @@ Optional .env settings: ODYSSEUS_BASE_URL=http://localhost:7011, ODYSSEUS_HEALTH
     title: '10. Autonomous AI Engineer (jarvis_app.py)',
     filename: 'jarvis_app.py',
     language: 'python',
-    description: 'Standalone Tkinter Voice + Devin-style AI Software Engineer with create_project_scaffold, multi-file plan-and-execute loop, and verify_project_code linter/compiler.',
+    description: 'Standalone Tkinter Voice + Devin-style AI Software Engineer with inline JSON tool-call extractor, persistent working directory, GitHub repo auto-resolver, and autonomous self-healing loop.',
     content: jarvisAppSource
   }
 ];
