@@ -23,6 +23,7 @@ import time
 import traceback
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 
 ROOT = Path(__file__).resolve().parent
@@ -158,9 +159,14 @@ def local_url(value):
 def http(url, body=None, timeout=6):
     payload = None if body is None else json.dumps(body).encode("utf-8")
     request = Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urlopen(request, timeout=timeout) as response:
-        # Bounded reads also protect the doctor from oversized responses.
-        return response.read(262144).decode("utf-8", errors="replace")
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            # Bounded reads also protect the doctor from oversized responses.
+            return response.read(262144).decode("utf-8", errors="replace")
+    except URLError as error:
+        if isinstance(error.reason, ConnectionRefusedError):
+            raise ConnectionError(f"Nothing is listening at {url}. Start that service, then retry.") from None
+        raise ConnectionError(f"Cannot reach {url}: {error.reason}") from None
 
 
 def check_files():
@@ -434,7 +440,7 @@ def main():
                 LOG.info("%s: OK after retry", name)
             except Exception as error:
                 errors[name] = error
-                LOG.error("%s still failing:\n%s", name, traceback.format_exc())
+                LOG.error("%s still failing: %s", name, error)
         if errors:
             doctor(errors, ollama)
             instructions(errors, ollama, odysseus)
