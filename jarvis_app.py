@@ -132,25 +132,126 @@ FONT = "Consolas"
 
 
 def check_path(path):
-    target = Path(os.path.expandvars(str(path))).expanduser()
+    global CURRENT_WORKDIR
+    raw = str(path or ".").strip().strip('"').strip("'")
+    # Automatically rewrite hallucinated placeholder user paths (like C:\Users\name\...) to the real user home
+    home_str = str(Path.home())
+    raw = re.sub(
+        r"^[A-Za-z]:[\\/]Users[\\/](?:name|user|username|your-username|admin|default)(?=[\\/]|$)",
+        lambda _: home_str,
+        raw,
+        flags=re.IGNORECASE,
+    )
+    raw = re.sub(
+        r"^/(?:Users|home)/(?:name|user|username|your-username)(?=/|$)",
+        lambda _: home_str,
+        raw,
+        flags=re.IGNORECASE,
+    )
+    target = Path(os.path.expandvars(raw)).expanduser()
     if not target.is_absolute():
-        target = Path.home() / target
-    target = target.resolve()
-    return target
+        base = CURRENT_WORKDIR if (CURRENT_WORKDIR and CURRENT_WORKDIR.exists()) else Path.home()
+        # If the relative path starts with a top-level user folder like Documents/Desktop/Downloads, anchor at Path.home()
+        first_part = target.parts[0].lower() if target.parts else ""
+        if first_part in {"documents", "desktop", "downloads", "pictures", "music", "videos", "onedrive"}:
+            base = Path.home()
+        target = base / target
+    return target.resolve()
 
 
 def trim(text, limit=OUTPUT_LIMIT):
     return text if len(text) <= limit else text[:limit] + "\n...[truncated]"
 
 
-def run_command(command, shell="powershell"):
+def _is_long_running_server_cmd(command: str) -> bool:
+    lower = command.lower().strip()
+    server_patterns = [
+        r"\bnpm\s+(?:run\s+)?(?:start|dev|serve)\b",
+        r"\bpnpm\s+(?:run\s+)?(?:start|dev|serve)\b",
+        r"\byarn\s+(?:run\s+)?(?:start|dev|serve)\b",
+        r"\bnpx\s+(?:next|vite|ts-node|tsx|nodemon|omniroute)\b",
+        r"\bpython(?:3)?\s+-m\s+http\.server\b",
+        r"\buvicorn\b",
+        r"\bstreamlit\s+run\b",
+        r"\bflask\s+run\b",
+        r"\bdjango-admin\s+runserver\b",
+        r"\bmanage\.py\s+runserver\b",
+    ]
+    return any(re.search(pat, lower) for pat in server_patterns)
+
+
+def run_command(command, shell="powershell", cwd=""):
+    global CURRENT_WORKDIR
+    work_dir = check_path(cwd) if cwd else (CURRENT_WORKDIR if CURRENT_WORKDIR.is_dir() else Path.home())
+    if work_dir.is_file():
+        work_dir = work_dir.parent
+    work_dir.mkdir(parents=True, exist_ok=True)
+    CURRENT_WORKDIR = work_dir
+
+    cmd_str = str(command or "").strip()
+    if not cmd_str:
+        return "Error: empty command."
+
+    # Handle bare 'cd <dir>' commands so working directory persists across tool calls
+    cd_match = re.match(r"^cd\s+(?:/d\s+)?(.+)$", cmd_str, flags=re.IGNORECASE)
+    if cd_match and "&&" not in cmd_str and ";" not in cmd_str:
+        new_dir = check_path(cd_match.group(1).strip())
+        if new_dir.is_dir():
+            CURRENT_WORKDIR = new_dir
+            return f"exit code 0\nChanged working directory to {CURRENT_WORKDIR}"
+        return f"exit code 1\nDirectory not found: {new_dir}"
+
+    # Pre-check common mistake: running `node index.js` when package.json uses another entry or script
+    if re.match(r"^node\s+index\.js\b", cmd_str, flags=re.IGNORECASE) and not (work_dir / "index.js").exists():
+        pkg_file = work_dir / "package.json"
+        if pkg_file.is_file():
+            try:
+                pkg = json.loads(pkg_file.read_text(encoding="utf-8", errors="replace"))
+                scripts = pkg.get("scripts") or {}
+                main_entry = pkg.get("main") or ""
+                if main_entry and (work_dir / main_entry).is_file():
+                    cmd_str = f'node "{main_entry}"'
+                elif "start" in scripts:
+                    cmd_str = "npm start"
+                elif "dev" in scripts:
+                    cmd_str = "npm run dev"
+            except Exception:
+                pass
+
     if os.name == "nt":
-        argv = ["cmd", "/c", command] if shell == "cmd" else ["powershell", "-NoProfile", "-Command", command]
+        argv = ["cmd", "/c", cmd_str] if shell == "cmd" else ["powershell", "-NoProfile", "-Command", cmd_str]
     else:
-        argv = ["bash", "-lc", command]
-    result = subprocess.run(argv, capture_output=True, text=True, errors="replace",
-                            timeout=300, cwd=Path.home())
-    return trim(f"exit code {result.returncode}\n{result.stdout}{result.stderr}")
+        argv = ["bash", "-lc", cmd_str]
+
+    # If this is a dev/start server command, run it briefly (8s) to capture startup logs or immediate crash errors
+    # without freezing Jarvis for 300 seconds when the server stays alive listening on a port.
+    if _is_long_running_server_cmd(cmd_str):
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(work_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+        )
+        try:
+            out, err = proc.communicate(timeout=8)
+            return trim(f"[cwd: {work_dir}]\n$ {cmd_str}\nexit code {proc.returncode}\n{out}{err}")
+        except subprocess.TimeoutExpired:
+            return (
+                f"[cwd: {work_dir}]\n$ {cmd_str}\nexit code 0\n"
+                f"Server process started and is running in background (PID {proc.pid}) inside {work_dir}."
+            )
+
+    result = subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=300,
+        cwd=str(work_dir),
+    )
+    return trim(f"[cwd: {work_dir}]\n$ {cmd_str}\nexit code {result.returncode}\n{result.stdout}{result.stderr}")
 
 
 def open_app(path, args=None):
@@ -392,16 +493,160 @@ def search_code(query, root=""):
     return trim("\n".join(hits) or "Code mein kuch nahi mila.")
 
 
-def open_vscode(folder_path):
+def open_vscode(folder_path, create_if_missing=True):
+    global CURRENT_WORKDIR
     target = check_path(folder_path)
-    if not target.is_dir():
-        return f"Folder nahi mila: {target}"
-    code = shutil.which("code")
+    # If the user passed a file path (e.g. new project.txt) or non-existent folder, create it automatically
+    if not target.exists():
+        if create_if_missing:
+            if target.suffix:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("", encoding="utf-8")
+            else:
+                target.mkdir(parents=True, exist_ok=True)
+        else:
+            return f"Folder nahi mila: {target}"
+    CURRENT_WORKDIR = target if target.is_dir() else target.parent
+    code = shutil.which("code") or shutil.which("code.cmd")
+    if code is None and os.name == "nt":
+        for candidate in (
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Microsoft VS Code" / "bin" / "code.cmd",
+            Path("C:/Program Files/Microsoft VS Code/bin/code.cmd"),
+        ):
+            if candidate.is_file():
+                code = str(candidate)
+                break
     if code is None:
         return ("VS Code ka 'code' command PATH mein nahi hai. VS Code mein Ctrl+Shift+P dabakar "
                 "'Shell Command: Install code command in PATH' chalayein.")
-    subprocess.Popen([code, str(target)], cwd=Path.home())
+    subprocess.Popen([code, str(target)], cwd=str(CURRENT_WORKDIR), shell=(os.name == "nt"))
     return f"VS Code mein khol diya: {target}"
+
+
+def find_github_repo(query, limit=5):
+    """
+    Searches GitHub API (with DuckDuckGo fallback for typos like 'ominiroute' -> 'omniroute')
+    to find the real repository URL, description, stars, and language.
+    """
+    clean_q = str(query or "").strip()
+    if not clean_q:
+        return "Error: repo query khali hai."
+
+    # Generate typo-tolerant search variants (e.g., 'ominiroute' -> 'omniroute')
+    search_variants = [clean_q]
+    if "omini" in clean_q.lower():
+        search_variants.append(re.sub(r"omini", "omni", clean_q, flags=re.IGNORECASE))
+
+    items = []
+    for variant in search_variants:
+        try:
+            resp = requests.get(
+                "https://api.github.com/search/repositories",
+                params={"q": variant, "per_page": limit},
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "Jarvis/2.0"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                items = resp.json().get("items") or []
+                if items:
+                    break
+        except requests.RequestException:
+            pass
+
+    if items:
+        lines = []
+        for idx, repo in enumerate(items[:limit], 1):
+            lines.append(
+                f"{idx}. {repo.get('full_name')} ({repo.get('stargazers_count', 0)} stars, {repo.get('language') or 'Code'})\n"
+                f"   URL: {repo.get('html_url')}\n"
+                f"   Description: {repo.get('description') or 'No description'}"
+            )
+        return "\n\n".join(lines)
+
+    # Fallback to DuckDuckGo search scoped to github.com
+    ddg_results = web_search(f"site:github.com {clean_q}", limit=limit)
+    return f"GitHub Search Results for '{clean_q}':\n{ddg_results}"
+
+
+def _resolve_github_url(url_or_query: str) -> str:
+    """
+    Resolves a repo name or placeholder URL (like 'https://github.com/your-username/ominiroute'
+    or 'ominiroute') into a real, working GitHub repository URL.
+    """
+    raw = str(url_or_query or "").strip().rstrip("/")
+    is_placeholder = any(
+        bad in raw.lower()
+        for bad in ("your-username", "yourusername", "/username/", "/owner/", "/user/", "example.com")
+    )
+    if raw.startswith(("http://", "https://")) and "github.com/" in raw.lower() and not is_placeholder:
+        return raw
+
+    # Extract search term from the last segment or query string
+    search_term = raw.split("/")[-1].removesuffix(".git") if "/" in raw else raw
+    variants = [search_term]
+    if "omini" in search_term.lower():
+        variants.append(re.sub(r"omini", "omni", search_term, flags=re.IGNORECASE))
+
+    for term in variants:
+        try:
+            resp = requests.get(
+                "https://api.github.com/search/repositories",
+                params={"q": term, "per_page": 3},
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "Jarvis/2.0"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                items = resp.json().get("items") or []
+                if items:
+                    return items[0]["html_url"]
+        except requests.RequestException:
+            pass
+
+    # Fallback: parse first github.com/<owner>/<repo> URL from DuckDuckGo search
+    try:
+        ddg = web_search(f"site:github.com {search_term}", limit=5)
+        match = re.search(r"https?://github\.com/[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+", ddg)
+        if match:
+            return match.group(0)
+    except Exception:
+        pass
+
+    return raw
+
+
+def _detect_and_summarize_start_commands(target: Path) -> dict:
+    """Inspects package.json, pyproject.toml, requirements.txt, and entry files to determine how to build and run a repo."""
+    info = {"project_dir": str(target), "stack": [], "recommended_start": None, "build_command": None, "scripts": {}}
+    pkg_path = target / "package.json"
+    if pkg_path.is_file():
+        info["stack"].append("Node.js/TypeScript")
+        try:
+            pkg = json.loads(pkg_path.read_text(encoding="utf-8", errors="replace"))
+            scripts = pkg.get("scripts") or {}
+            info["scripts"] = scripts
+            if "build" in scripts and not (target / "dist").exists() and not (target / ".next").exists():
+                info["build_command"] = "npm run build"
+            if "dev" in scripts:
+                info["recommended_start"] = "npm run dev"
+            elif "start" in scripts:
+                info["recommended_start"] = "npm start"
+            elif pkg.get("main") and (target / pkg["main"]).is_file():
+                info["recommended_start"] = f'node "{pkg["main"]}"'
+        except Exception:
+            pass
+
+    for py_entry in ("main.py", "app.py", "run.py", "server.py", "manage.py"):
+        if (target / py_entry).is_file():
+            info["stack"].append("Python")
+            venv_py = target / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            py_cmd = f'"{venv_py}"' if venv_py.is_file() else f'"{sys.executable}"'
+            if py_entry == "manage.py":
+                info["recommended_start"] = f"{py_cmd} manage.py runserver"
+            else:
+                info["recommended_start"] = f"{py_cmd} {py_entry}"
+            break
+
+    return info
 
 
 def _run_step(argv, cwd):
@@ -424,38 +669,80 @@ def _download_github_zip(url, target):
     (target.parent / top).rename(target)
 
 
-def setup_repo(url, folder=""):
-    if "github.com" not in url:
-        return "Abhi sirf GitHub repo links support hain (https://github.com/owner/repo)."
-    name = url.rstrip("/").removesuffix(".git").split("/")[-1] or "repo"
-    target = check_path(folder) if folder else Path.home() / name
+def setup_repo(url, folder="", auto_run=True):
+    global CURRENT_WORKDIR
+    resolved_url = _resolve_github_url(url)
+    if "github.com" not in resolved_url.lower():
+        return f"GitHub repo nahi mila ('{url}'). find_github_repo se sahi naam search karein."
+
+    name = resolved_url.rstrip("/").removesuffix(".git").split("/")[-1] or "repo"
+    if folder:
+        target = check_path(folder)
+        # If folder was passed as just the repo name relative to current dir, anchor at Path.home()
+        if not Path(folder).is_absolute() and len(Path(folder).parts) == 1:
+            target = (Path.home() / folder).resolve()
+    else:
+        target = (Path.home() / name).resolve()
+
     git = shutil.which("git")
-    steps = []
+    steps = [f"Resolved GitHub Repository: {resolved_url}", f"Target Directory: {target}"]
+
     if (target / ".git").is_dir():
         steps.append(_run_step([git, "pull", "--ff-only"], target) if git
-                     else "Repo pehle se hai, git nahi mila isliye update nahi kiya.")
+                     else "Repo pehle se मौजूद hai.")
     elif target.exists() and any(target.iterdir()):
-        return f"Folder pehle se khali nahi hai: {target}. Dusra folder dein."
+        steps.append(f"Existing non-empty folder detected at {target}; reusing existing files.")
     elif git:
-        steps.append(_run_step([git, "clone", url, str(target)], Path.home()))
+        steps.append(_run_step([git, "clone", resolved_url, str(target)], Path.home()))
     else:
-        _download_github_zip(url, target)
+        _download_github_zip(resolved_url, target)
         steps.append(f"Zip download aur extract ho gaya: {target}")
+
+    if not target.is_dir():
+        return trim("\n\n".join(steps))
+
+    CURRENT_WORKDIR = target
+
+    # Auto-copy .env.example -> .env if .env is missing
+    if not (target / ".env").exists():
+        for env_template in (".env.example", ".env.sample", ".env.template"):
+            if (target / env_template).is_file():
+                shutil.copy2(target / env_template, target / ".env")
+                steps.append(f"Copied {env_template} -> .env automatically.")
+                break
+
     readme = next((path for path in (target / "README.md", target / "readme.md", target / "README.txt",
                                      target / "README") if path.is_file()), None)
-    steps.append("README:\n" + (trim(readme.read_text(encoding="utf-8", errors="replace"), 4000)
+    steps.append("README:\n" + (trim(readme.read_text(encoding="utf-8", errors="replace"), 3000)
                                if readme else "README nahi mili."))
+
     if (target / "package.json").is_file():
-        npm = shutil.which("npm")
-        steps.append(_run_step([npm, "install"], target) if npm
-                     else "npm nahi mila, dependencies install nahi hui.")
+        npm = shutil.which("npm") or shutil.which("npm.cmd")
+        if npm:
+            steps.append(_run_step([npm, "install"], target))
+        else:
+            steps.append("npm nahi mila, Node dependencies install nahi hui.")
+
     if (target / "requirements.txt").is_file():
         venv = target / ".venv"
         if not venv.exists():
             steps.append(_run_step([sys.executable, "-m", "venv", str(venv)], target))
         pip = venv / "Scripts" / "pip.exe" if os.name == "nt" else venv / "bin" / "pip"
-        steps.append(_run_step([str(pip), "install", "-r", "requirements.txt"], target))
-    return trim(f"Folder: {target}\n\n" + "\n\n".join(steps), 8000)
+        if pip.is_file():
+            steps.append(_run_step([str(pip), "install", "-r", "requirements.txt"], target))
+
+    run_info = _detect_and_summarize_start_commands(target)
+    steps.append(f"Detected Project Stack & Scripts: {json.dumps(run_info, ensure_ascii=False)}")
+
+    if auto_run and run_info.get("recommended_start"):
+        if run_info.get("build_command"):
+            steps.append(f"Running build step: {run_info['build_command']}\n" +
+                         run_command(run_info["build_command"], cwd=str(target)))
+        start_cmd = run_info["recommended_start"]
+        steps.append(f"Auto-starting project with `{start_cmd}` inside {target}:\n" +
+                     run_command(start_cmd, cwd=str(target)))
+
+    return trim(f"Active Working Directory set to: {target}\n\n" + "\n\n".join(steps), 8000)
 
 
 def take_screenshot(question="Screen par kya dikh raha hai? Koi error ho to uska fix batao.", window_title=""):
@@ -1467,8 +1754,8 @@ def tool(name, description, properties, required):
 TEXT_SCHEMA = {"type": "string"}
 TOOL_SCHEMAS = [
     tool("run_command", "Run a PowerShell (default) or cmd command on the PC and return its output. "
-         "Use it for settings, registry, services, networking and anything without a dedicated tool.",
-         {"command": TEXT_SCHEMA, "shell": {"type": "string", "enum": ["powershell", "cmd"]}}, ["command"]),
+         "Defaults to the current active project working directory unless cwd is specified.",
+         {"command": TEXT_SCHEMA, "shell": {"type": "string", "enum": ["powershell", "cmd"]}, "cwd": TEXT_SCHEMA}, ["command"]),
     tool("open_app", "Open or start an application or .exe, with optional arguments.",
          {"path": TEXT_SCHEMA, "args": {"type": "array", "items": TEXT_SCHEMA}}, ["path"]),
     tool("open_url", "Open a web address in the default browser.", {"url": TEXT_SCHEMA}, ["url"]),
@@ -1508,10 +1795,15 @@ TOOL_SCHEMAS += [
     tool("search_code", "Search the text inside code files under a folder (default: user home) for a word or phrase. "
          "Returns file path, line number and the line. Use it to find which file holds a feature.",
          {"query": TEXT_SCHEMA, "root": TEXT_SCHEMA}, ["query"]),
-    tool("open_vscode", "Open a project folder in VS Code.", {"folder_path": TEXT_SCHEMA}, ["folder_path"]),
-    tool("setup_repo", "Set up a GitHub repo from its URL: clone it (or download the zip), read its README, and "
-         "install dependencies (npm install, or .venv with pip install -r requirements.txt). Returns the steps and output.",
-         {"url": TEXT_SCHEMA, "folder": TEXT_SCHEMA}, ["url"]),
+    tool("open_vscode", "Open a project folder or file in VS Code (creates it automatically if missing).",
+         {"folder_path": TEXT_SCHEMA, "create_if_missing": {"type": "boolean"}}, ["folder_path"]),
+    tool("find_github_repo", "Search GitHub for a repository by name or topic (handles typos like 'ominiroute' -> 'omniroute') "
+         "and return the real repository URLs, stars, and descriptions.",
+         {"query": TEXT_SCHEMA, "limit": {"type": "integer"}}, ["query"]),
+    tool("setup_repo", "Set up and optionally run a GitHub repo from its URL or repo name: resolves the real GitHub URL, "
+         "clones it, reads README.md, copies .env.example to .env, installs dependencies (npm install or .venv pip install), "
+         "and auto-starts the project when auto_run=True.",
+         {"url": TEXT_SCHEMA, "folder": TEXT_SCHEMA, "auto_run": {"type": "boolean"}}, ["url"]),
     tool("take_screenshot", "Capture the PC screen and ask the Ollama vision model about it, for example to read an "
          "error on screen. Returns the vision model's answer.", {"question": TEXT_SCHEMA}, []),
     tool("browse_web", "Open a web page in a headless browser (JavaScript runs) and return its title and visible text. "
@@ -1562,12 +1854,137 @@ TOOL_SCHEMAS += [
 ]
 
 
+def normalize_tool_args(name, args):
+    """Normalizes common parameter name variations emitted by local LLMs."""
+    if not isinstance(args, dict):
+        return {}
+    out = dict(args)
+    if name == "run_command":
+        if "command" not in out:
+            for alias in ("cmd", "script", "line"):
+                if alias in out:
+                    out["command"] = out.pop(alias)
+                    break
+        if "cwd" not in out:
+            for alias in ("folder", "path", "working_dir", "directory"):
+                if alias in out:
+                    out["cwd"] = out.pop(alias)
+                    break
+        allowed = {"command", "shell", "cwd"}
+        return {k: v for k, v in out.items() if k in allowed}
+
+    if name == "open_vscode":
+        if "folder_path" not in out:
+            for alias in ("path", "folder", "directory", "target"):
+                if alias in out:
+                    out["folder_path"] = out.pop(alias)
+                    break
+        allowed = {"folder_path", "create_if_missing"}
+        return {k: v for k, v in out.items() if k in allowed}
+
+    if name == "setup_repo":
+        if "url" not in out:
+            for alias in ("repo_url", "repo", "name", "query"):
+                if alias in out:
+                    out["url"] = out.pop(alias)
+                    break
+        if "folder" not in out:
+            for alias in ("target_folder", "path", "directory"):
+                if alias in out:
+                    out["folder"] = out.pop(alias)
+                    break
+        allowed = {"url", "folder", "auto_run"}
+        return {k: v for k, v in out.items() if k in allowed}
+
+    if name == "edit_file":
+        if "old_text" not in out and "search_text" in out:
+            out["old_text"] = out.pop("search_text")
+        if "new_text" not in out and "replace_text" in out:
+            out["new_text"] = out.pop("replace_text")
+        allowed = {"path", "old_text", "new_text", "start_line", "end_line"}
+        return {k: v for k, v in out.items() if k in allowed}
+
+    if name == "write_file":
+        if "path" not in out and "file_path" in out:
+            out["path"] = out.pop("file_path")
+        allowed = {"path", "content"}
+        return {k: v for k, v in out.items() if k in allowed}
+
+    if name in ("read_file", "list_dir", "delete_path"):
+        if "path" not in out:
+            for alias in ("file_path", "folder_path", "folder", "directory"):
+                if alias in out:
+                    out["path"] = out.pop(alias)
+                    break
+        return {"path": out.get("path", ".")}
+
+    return out
+
+
+def extract_inline_tool_calls(content: str) -> tuple[list[dict], str]:
+    """
+    Detects raw JSON tool calls emitted inside message['content'] by local models
+    (e.g. {"name": "run_command", "parameters": {"command": "npm start"}}) and converts
+    them into executable tool_calls while stripping the raw JSON from the user-facing text.
+    """
+    if not content or "{" not in content:
+        return [], content
+
+    decoder = json.JSONDecoder()
+    extracted = []
+    spans_to_remove = []
+    idx = 0
+    length = len(content)
+
+    while idx < length:
+        brace_pos = content.find("{", idx)
+        if brace_pos == -1:
+            break
+        try:
+            obj, end_pos = decoder.raw_decode(content, brace_pos)
+            if isinstance(obj, dict):
+                fn_name = obj.get("name") or (obj.get("function", {}) if isinstance(obj.get("function"), dict) else {}).get("name")
+                if fn_name and fn_name in TOOL_FUNCTIONS:
+                    raw_params = (
+                        obj.get("parameters")
+                        or obj.get("arguments")
+                        or obj.get("args")
+                        or (obj.get("function", {}) if isinstance(obj.get("function"), dict) else {}).get("arguments")
+                        or {k: v for k, v in obj.items() if k not in ("name", "type", "function")}
+                    )
+                    extracted.append({
+                        "function": {
+                            "name": fn_name,
+                            "arguments": parse_arguments(raw_params),
+                        }
+                    })
+                    spans_to_remove.append((brace_pos, end_pos))
+                    idx = end_pos
+                    continue
+        except ValueError:
+            pass
+        idx = brace_pos + 1
+
+    if not spans_to_remove:
+        return [], content
+
+    cleaned_parts = []
+    last_end = 0
+    for start, end in spans_to_remove:
+        cleaned_parts.append(content[last_end:start])
+        last_end = end
+    cleaned_parts.append(content[last_end:])
+    cleaned_text = re.sub(r"```(?:json)?\s*```", "", "".join(cleaned_parts)).strip()
+    return extracted, cleaned_text
+
+
 def execute(name, args):
     function = TOOL_FUNCTIONS.get(name)
     if function is None:
         return f"Unknown tool: {name}"
     try:
-        return str(function(**args))
+        normalized = normalize_tool_args(name, args)
+        return str(function(**normalized))
     except Exception as error:
         return f"Error: {type(error).__name__}: {error}"
 
@@ -1595,13 +2012,31 @@ def parse_arguments(raw):
         return {}
 
 
-CONFIRM_TOOLS = {"delete_path", "kill_process", "power_action", "write_file", "edit_file", "setup_repo"}
+CONFIRM_TOOLS = {"delete_path", "power_action"}
+
+
+def _did_tool_fail(name: str, result: str) -> bool:
+    if not result:
+        return False
+    lower = result.lower()
+    if result.startswith("Error:") or "folder nahi mila:" in lower or "file nahi mili:" in lower:
+        return True
+    if name == "run_command":
+        match = re.search(r"exit code\s+(-?\d+)", lower)
+        if match and int(match.group(1)) != 0:
+            return True
+    if "cannot find module" in lower or "enoent" in lower or "traceback (most recent call last)" in lower:
+        return True
+    return False
 
 
 def run_turn(messages, on_tool, on_plan, confirm, cancel):
     limit = int(SETTINGS["max_agent_steps"])
     active_project_root = None
     project_verified = False
+    last_failed_tool = None
+    self_heal_retries = 0
+    max_self_heal_retries = 4
 
     for step in range(1, limit + 1):
         if cancel.is_set():
@@ -1610,10 +2045,46 @@ def run_turn(messages, on_tool, on_plan, confirm, cancel):
             message = ask_model(messages)
         except requests.RequestException as error:
             return None, f"Ollama se connect nahi ho paa raha ({error}). Ollama app kholiye."
+
+        raw_content = (message.get("content") or "").strip()
+        calls = list(message.get("tool_calls") or [])
+
+        # Fallback: If the local LLM emitted a JSON tool call inside message["content"], extract and execute it!
+        if not calls and raw_content:
+            inline_calls, cleaned_content = extract_inline_tool_calls(raw_content)
+            if inline_calls:
+                calls = inline_calls
+                message = dict(message)
+                message["content"] = cleaned_content
+                message["tool_calls"] = inline_calls
+                raw_content = cleaned_content
+
         messages.append(message)
-        calls = message.get("tool_calls") or []
+
         if not calls:
-            # If a project was scaffolded in this turn, ensure all files are populated and verified before stopping
+            # 1. Autonomous Self-Healing Continuation: if the previous tool failed OR the model said "I'll try again"
+            # without emitting a tool call, automatically push it to diagnose and execute the fix!
+            promises_retry = any(
+                phrase in raw_content.lower()
+                for phrase in ("i'll try again", "let me try again", "i am going to try", "i'm going to try", "dobara try")
+            )
+            if (last_failed_tool or promises_retry) and self_heal_retries < max_self_heal_retries:
+                self_heal_retries += 1
+                fail_name, fail_args, fail_output = last_failed_tool or ("previous_step", {}, raw_content)
+                last_failed_tool = None
+                heal_prompt = (
+                    f"AUTONOMOUS SELF-HEALING DIRECTIVE (Attempt {self_heal_retries}/{max_self_heal_retries}):\n"
+                    f"Active Working Directory: {CURRENT_WORKDIR}\n"
+                    f"Last failed tool `{fail_name}` with args {json.dumps(fail_args, ensure_ascii=False)} produced:\n"
+                    f"{fail_output[:1500]}\n\n"
+                    "Do NOT stop and do NOT print raw JSON in text. Immediately call the appropriate tool "
+                    "(e.g. list_dir, read_file on package.json/README.md, find_github_repo, setup_repo, edit_file, "
+                    "or run_command with the right script/cwd) to solve the problem and complete the user's request."
+                )
+                messages.append({"role": "user", "content": heal_prompt})
+                continue
+
+            # 2. Multi-file Project Builder Continuation Guard
             if active_project_root and not project_verified:
                 verification_raw = verify_project_code(active_project_root)
                 try:
@@ -1632,18 +2103,27 @@ def run_turn(messages, on_tool, on_plan, confirm, cancel):
                     messages.append({"role": "user", "content": nudge})
                     continue
                 project_verified = True
-            return (message.get("content") or "").strip() or "Theek hai.", None
-        if message.get("content"):
-            on_plan(message["content"].strip())
+
+            return raw_content or "Theek hai.", None
+
+        if raw_content:
+            on_plan(raw_content)
+
         for call in calls:
             function = call.get("function", {})
             name = function.get("name", "")
-            args = parse_arguments(function.get("arguments"))
+            args = normalize_tool_args(name, parse_arguments(function.get("arguments")))
             on_tool(step, limit, name, args)
             if name in CONFIRM_TOOLS and SETTINGS["confirm_destructive"] and not confirm(name, args):
                 result = "User ne is action ki permission nahi di. Ise skip karke batayein."
             else:
                 result = execute(name, args)
+
+            if _did_tool_fail(name, result):
+                last_failed_tool = (name, args, result)
+            else:
+                last_failed_tool = None
+
             if name == "create_project_scaffold":
                 try:
                     parsed_scaffold = json.loads(result)
