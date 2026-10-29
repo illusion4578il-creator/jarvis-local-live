@@ -3,6 +3,8 @@
 
 import datetime
 import json
+import base64
+import io
 import math
 import os
 import queue
@@ -11,9 +13,11 @@ import re
 import shutil
 import subprocess
 import threading
+import sys
 import time
 import tkinter as tk
 import webbrowser
+import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -46,10 +50,15 @@ SYSTEM_PROMPT = (
     "relative to the user's home folder). Never create a dummy, simulated, sandbox or virtual environment, and never "
     "pretend to act; to run a program or script, use run_command or open_app on the real file. "
     "Always confirm with list_dir or read_file that a file change really happened. "
-    "For a GitHub repo the user names: if git is installed, clone it with run_command (git clone <url> into a folder "
-    "in the user's home folder); otherwise download the repo's zip from GitHub with Invoke-WebRequest and extract it "
-    "with Expand-Archive. Then read its README with read_file, explain in one or two lines what it does, and tell the "
-    "user the install and run steps before you install dependencies or run its code. Run that code only after the user agrees. "
+    "For a GitHub repo the user names, use setup_repo with its URL: it clones or downloads the repo, reads its README "
+    "and installs its dependencies (npm install, or a .venv with pip install -r requirements.txt). Then explain in one or "
+    "two lines what the project does and how to run it. Run its code only after the user agrees. "
+    "To write or change code, use search_code to find the right file, read_file to read it, then edit_file to change only "
+    "the lines that need it (write_file only for a brand-new file), and open_vscode to show the folder in VS Code. "
+    "If a run fails with an error, read the error text, find the cause, fix the file with edit_file and run it again; "
+    "repeat at most three times, then say what still fails. "
+    "To look at the screen (an error on screen, a window the user points at), use take_screenshot. "
+    "To read a web page the way a browser shows it, use browse_web. "
     "Only delete, kill, shut down or restart when the user clearly asked for it. "
     "When the user reports a PC problem (wifi, internet, sound, a device, an app or a slow PC), troubleshoot it yourself: "
     "first gather facts with run_command (for example Get-NetAdapter, Get-NetIPConfiguration, ipconfig /all, "
@@ -74,6 +83,7 @@ DEFAULT_SETTINGS = {
     "mic_threshold": 400,
     "allowed_folders": [str(Path.home())],
     "max_agent_steps": 12,
+    "vision_model": os.getenv("OLLAMA_VISION_MODEL", "llava"),
     "confirm_destructive": True,
 }
 
@@ -222,6 +232,33 @@ def write_file(path, content):
     return f"Wrote {len(content)} characters to {target}"
 
 
+def edit_file(path, old_text="", new_text="", start_line=0, end_line=0):
+    target = check_path(path)
+    if not target.is_file():
+        return f"File nahi mili: {target}"
+    text = target.read_text(encoding="utf-8", errors="replace")
+    if old_text:
+        count = text.count(old_text)
+        if count == 0:
+            return f"old_text {target} mein nahi mila. read_file se exact text lekar dobara try karein."
+        if count > 1:
+            return f"old_text {count} jagah mila. Aage-peeche ki kuch lines jod kar unique block dein."
+        updated = text.replace(old_text, new_text, 1)
+        summary = f"Replaced 1 block in {target}"
+    else:
+        start, end = int(start_line or 0), int(end_line or 0)
+        lines = text.splitlines(keepends=True)
+        if not 1 <= start <= end <= len(lines):
+            return f"Line range {start}-{end} file ki length ({len(lines)} lines) se bahar hai."
+        replacement = new_text if (not new_text or new_text.endswith("\n")) else new_text + "\n"
+        updated = "".join(lines[:start - 1]) + replacement + "".join(lines[end:])
+        summary = f"Replaced lines {start}-{end} in {target}"
+    if updated == text:
+        return "Koi change nahi hua."
+    target.write_text(updated, encoding="utf-8")
+    return f"{summary}."
+
+
 def list_dir(path="."):
     entries = sorted(check_path(path).iterdir(), key=lambda item: item.name.lower())
     return trim("\n".join(f"{'[DIR] ' if item.is_dir() else ''}{item.name}" for item in entries))
@@ -309,6 +346,150 @@ def web_search(query, limit=5):
     return trim("\n\n".join(results))
 
 
+CODE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".css", ".html", ".md", ".txt", ".yml",
+                   ".yaml", ".toml", ".sql", ".java", ".cs", ".go", ".rs", ".c", ".cpp", ".h"}
+SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
+
+
+def search_code(query, root=""):
+    base = check_path(root) if root else Path.home()
+    needle = query.lower()
+    hits = []
+    files_seen = 0
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [name for name in dirnames if name not in SKIP_DIRS]
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if path.suffix.lower() not in CODE_EXTENSIONS:
+                continue
+            files_seen += 1
+            if files_seen > 5000:
+                return trim("\n".join(hits) or "Bahut zyada files hain. Root folder chhota karke dobara try karein.")
+            try:
+                if path.stat().st_size > 1000000:
+                    continue
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for number, line in enumerate(lines, 1):
+                if needle in line.lower():
+                    hits.append(f"{path}:{number}: {line.strip()[:160]}")
+                    if len(hits) >= 60:
+                        return trim("\n".join(hits))
+    return trim("\n".join(hits) or "Code mein kuch nahi mila.")
+
+
+def open_vscode(folder_path):
+    target = check_path(folder_path)
+    if not target.is_dir():
+        return f"Folder nahi mila: {target}"
+    code = shutil.which("code")
+    if code is None:
+        return ("VS Code ka 'code' command PATH mein nahi hai. VS Code mein Ctrl+Shift+P dabakar "
+                "'Shell Command: Install code command in PATH' chalayein.")
+    subprocess.Popen([code, str(target)], cwd=Path.home())
+    return f"VS Code mein khol diya: {target}"
+
+
+def _run_step(argv, cwd):
+    result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace", timeout=900)
+    output = f"{result.stdout}{result.stderr}".strip()
+    return f"$ {' '.join(argv)}\nexit code {result.returncode}\n{trim(output, 2000)}"
+
+
+def _download_github_zip(url, target):
+    base = url.rstrip("/").removesuffix(".git")
+    for branch in ("main", "master"):
+        response = requests.get(f"{base}/archive/refs/heads/{branch}.zip", timeout=120)
+        if response.status_code == 200:
+            break
+    else:
+        raise RuntimeError("GitHub se zip download nahi hua (main ya master branch nahi mili).")
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        top = archive.namelist()[0].split("/")[0]
+        archive.extractall(target.parent)
+    (target.parent / top).rename(target)
+
+
+def setup_repo(url, folder=""):
+    if "github.com" not in url:
+        return "Abhi sirf GitHub repo links support hain (https://github.com/owner/repo)."
+    name = url.rstrip("/").removesuffix(".git").split("/")[-1] or "repo"
+    target = check_path(folder) if folder else Path.home() / name
+    git = shutil.which("git")
+    steps = []
+    if (target / ".git").is_dir():
+        steps.append(_run_step([git, "pull", "--ff-only"], target) if git
+                     else "Repo pehle se hai, git nahi mila isliye update nahi kiya.")
+    elif target.exists() and any(target.iterdir()):
+        return f"Folder pehle se khali nahi hai: {target}. Dusra folder dein."
+    elif git:
+        steps.append(_run_step([git, "clone", url, str(target)], Path.home()))
+    else:
+        _download_github_zip(url, target)
+        steps.append(f"Zip download aur extract ho gaya: {target}")
+    readme = next((path for path in (target / "README.md", target / "readme.md", target / "README.txt",
+                                     target / "README") if path.is_file()), None)
+    steps.append("README:\n" + (trim(readme.read_text(encoding="utf-8", errors="replace"), 4000)
+                               if readme else "README nahi mili."))
+    if (target / "package.json").is_file():
+        npm = shutil.which("npm")
+        steps.append(_run_step([npm, "install"], target) if npm
+                     else "npm nahi mila, dependencies install nahi hui.")
+    if (target / "requirements.txt").is_file():
+        venv = target / ".venv"
+        if not venv.exists():
+            steps.append(_run_step([sys.executable, "-m", "venv", str(venv)], target))
+        pip = venv / "Scripts" / "pip.exe" if os.name == "nt" else venv / "bin" / "pip"
+        steps.append(_run_step([str(pip), "install", "-r", "requirements.txt"], target))
+    return trim(f"Folder: {target}\n\n" + "\n\n".join(steps), 8000)
+
+
+def take_screenshot(question="Screen par kya dikh raha hai? Koi error ho to uska fix batao."):
+    try:
+        from PIL import ImageGrab
+    except ImportError:
+        return "Screenshot ke liye Pillow chahiye. Terminal mein 'pip install pillow' chalayein."
+    buffer = io.BytesIO()
+    ImageGrab.grab().save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    model = SETTINGS.get("vision_model") or "llava"
+    response = requests.post(f"{SETTINGS['ollama_url']}/api/chat", json={
+        "model": model, "stream": False,
+        "messages": [{"role": "user", "content": question, "images": [encoded]}],
+    }, timeout=600)
+    if response.status_code == 404:
+        return f"Vision model '{model}' Ollama mein nahi hai. Terminal mein 'ollama pull {model}' chalayein."
+    response.raise_for_status()
+    return trim(response.json()["message"]["content"].strip())
+
+
+def browse_web(url):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        response = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0 Jarvis/1.0"})
+        response.raise_for_status()
+        text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", response.text, flags=re.S | re.I)
+        text = re.sub(r"<[^>]+>", " ", text)
+        return trim("(Playwright nahi hai, simple page fetch): " + re.sub(r"\s+", " ", text).strip())
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(1500)
+                title = page.title()
+                text = page.inner_text("body")
+            finally:
+                browser.close()
+    except Exception as error:
+        return (f"Browser chal nahi paya ({type(error).__name__}: {error}). Terminal mein "
+                "'python -m playwright install chromium' chalayein.")
+    return trim(f"{title}\n{url}\n\n{text}")
+
+
 TOOL_FUNCTIONS = {
     "run_command": run_command,
     "open_app": open_app,
@@ -329,6 +510,14 @@ TOOL_FUNCTIONS = {
     "recall": recall,
     "web_search": web_search,
 }
+TOOL_FUNCTIONS.update({
+    "edit_file": edit_file,
+    "search_code": search_code,
+    "open_vscode": open_vscode,
+    "setup_repo": setup_repo,
+    "take_screenshot": take_screenshot,
+    "browse_web": browse_web,
+})
 
 
 def tool(name, description, properties, required):
@@ -371,6 +560,24 @@ TOOL_SCHEMAS = [
          "Use it to find up-to-date information, then open_url or learn_from_url for details.",
          {"query": TEXT_SCHEMA, "limit": {"type": "integer"}}, ["query"]),
 ]
+TOOL_SCHEMAS += [
+    tool("edit_file", "Edit part of an existing file in place: replace an exact text block (old_text) with new_text, "
+         "or replace a line range (start_line to end_line) with new_text. Only those lines change. Use read_file "
+         "first to get the exact text or line numbers.",
+         {"path": TEXT_SCHEMA, "old_text": TEXT_SCHEMA, "new_text": TEXT_SCHEMA,
+          "start_line": {"type": "integer"}, "end_line": {"type": "integer"}}, ["path", "new_text"]),
+    tool("search_code", "Search the text inside code files under a folder (default: user home) for a word or phrase. "
+         "Returns file path, line number and the line. Use it to find which file holds a feature.",
+         {"query": TEXT_SCHEMA, "root": TEXT_SCHEMA}, ["query"]),
+    tool("open_vscode", "Open a project folder in VS Code.", {"folder_path": TEXT_SCHEMA}, ["folder_path"]),
+    tool("setup_repo", "Set up a GitHub repo from its URL: clone it (or download the zip), read its README, and "
+         "install dependencies (npm install, or .venv with pip install -r requirements.txt). Returns the steps and output.",
+         {"url": TEXT_SCHEMA, "folder": TEXT_SCHEMA}, ["url"]),
+    tool("take_screenshot", "Capture the PC screen and ask the Ollama vision model about it, for example to read an "
+         "error on screen. Returns the vision model's answer.", {"question": TEXT_SCHEMA}, []),
+    tool("browse_web", "Open a web page in a headless browser (JavaScript runs) and return its title and visible text. "
+         "Use it to read documentation or check a website.", {"url": TEXT_SCHEMA}, ["url"]),
+]
 
 
 def execute(name, args):
@@ -406,7 +613,7 @@ def parse_arguments(raw):
         return {}
 
 
-CONFIRM_TOOLS = {"delete_path", "kill_process", "power_action", "write_file"}
+CONFIRM_TOOLS = {"delete_path", "kill_process", "power_action", "write_file", "edit_file", "setup_repo"}
 
 
 def run_turn(messages, on_tool, on_plan, confirm, cancel):

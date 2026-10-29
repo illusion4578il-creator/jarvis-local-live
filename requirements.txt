@@ -5,3 +5,5 @@ python-dotenv
 psutil
 pyttsx3
 SpeechRecognition
+pillow
+playwright
