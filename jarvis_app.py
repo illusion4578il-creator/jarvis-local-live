@@ -468,7 +468,7 @@ class Jarvis:
         self.dot.pack(side="right", padx=(0, 8))
         self.dot_item = self.dot.create_oval(2, 2, 10, 10, fill=CYAN, outline="")
 
-        self.wave = tk.Canvas(root, height=200, bg=PANEL, highlightthickness=1,
+        self.wave = tk.Canvas(root, height=150, bg=PANEL, highlightthickness=1,
                               highlightbackground=PANEL_EDGE)
         self.wave.pack(fill="x", padx=24, pady=(14, 0))
 
@@ -478,7 +478,7 @@ class Jarvis:
 
         chat_frame = tk.Frame(root, bg=PANEL, highlightthickness=1, highlightbackground=PANEL_EDGE)
         chat_frame.pack(fill="both", expand=True, padx=24, pady=(10, 12))
-        self.chat = tk.Text(chat_frame, bg=PANEL, fg=TEXT, font=(FONT, 11), wrap="word",
+        self.chat = tk.Text(chat_frame, bg=PANEL, fg=TEXT, font=(FONT, 11), wrap="word", height=8,
                             relief="flat", padx=18, pady=14, highlightthickness=0, borderwidth=0,
                             state="disabled", cursor="arrow")
         self.chat.pack(fill="both", expand=True)
