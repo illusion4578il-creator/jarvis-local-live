@@ -27,6 +27,10 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("jarvis.bootstrap")
+DEFAULT_REQUIREMENTS = """sounddevice
+requests
+python-dotenv
+"""
 PLATFORM = sys.platform
 
 
@@ -347,7 +351,8 @@ def ensure_venv():
 
     requirements = ROOT / "requirements.txt"
     if not requirements.is_file():
-        raise FileNotFoundError("requirements.txt is missing. Download the complete Jarvis package first.")
+        LOG.warning("requirements.txt not found; writing the default Jarvis requirements.")
+        requirements.write_text(DEFAULT_REQUIREMENTS, encoding="utf-8")
     python = venv_python()
     if not python.exists():
         if elevated():
