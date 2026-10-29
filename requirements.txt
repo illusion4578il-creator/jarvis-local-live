@@ -1,3 +1,7 @@
 sounddevice
+numpy
 requests
 python-dotenv
+psutil
+pyttsx3
+SpeechRecognition

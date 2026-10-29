@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-click Jarvis launcher: creates ./venv, installs requirements.txt when it changes, starts jarvis.py."""
+"""One-click Jarvis launcher: creates ./venv, installs requirements.txt when it changes, starts jarvis_app.py."""
 
 import hashlib
 import subprocess
@@ -52,7 +52,7 @@ def main():
     python = ensure_venv()
     if not ollama_running():
         print("Ollama chal nahi raha. Ollama app kholiye ya 'ollama serve' chalaiye. Jarvis phir bhi khul raha hai.")
-    return subprocess.call([str(gui_python(python)), str(ROOT / "jarvis.py")], cwd=ROOT)
+    return subprocess.call([str(gui_python(python)), str(ROOT / "jarvis_app.py")], cwd=ROOT)
 
 
 if __name__ == "__main__":
