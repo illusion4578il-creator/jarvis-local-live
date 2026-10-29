@@ -40,7 +40,9 @@ SYSTEM_PROMPT = (
     "You are Jarvis, a personal voice assistant running on the user's Windows PC with full access to it: "
     "PowerShell and cmd, programs, files and folders, running processes, system information, Windows settings, "
     "power actions, the web, and your own saved memory. Use tools to act; never say you cannot access the PC "
-    "when a tool can do it. Only delete, kill, shut down or restart when the user clearly asked for it. "
+    "when a tool can do it. For multi-step tasks, first say a one-line plan, then use one tool at a time and check "
+    "each result before the next. File tools work only inside the allowed folders; if one is refused, tell the user "
+    "to add that folder in Settings. Only delete, kill, shut down or restart when the user clearly asked for it. "
     "Your replies are spoken aloud: keep them short, natural and conversational, with no markdown, code blocks "
     "or lists. Reply in the same language the user speaks (Hindi, Hinglish or English)."
 )
@@ -52,6 +54,9 @@ DEFAULT_SETTINGS = {
     "voice_enabled": True,
     "speech_rate": 180,
     "mic_threshold": 400,
+    "allowed_folders": [str(Path.home())],
+    "max_agent_steps": 12,
+    "confirm_destructive": True,
 }
 
 
@@ -83,6 +88,15 @@ AMBER = "#F59E0B"
 MAGENTA = "#E879F9"
 RED = "#F87171"
 FONT = "Consolas"
+
+
+def check_path(path):
+    target = Path(path).expanduser().resolve()
+    for folder in SETTINGS["allowed_folders"]:
+        root = Path(folder).expanduser().resolve()
+        if target == root or root in target.parents:
+            return target
+    raise PermissionError(f"{target} allowed folders mein nahi hai. Settings mein folder add karein.")
 
 
 def trim(text, limit=OUTPUT_LIMIT):
@@ -181,23 +195,23 @@ def power_action(action):
 
 
 def read_file(path):
-    return trim(Path(path).expanduser().read_text(encoding="utf-8", errors="replace"))
+    return trim(check_path(path).read_text(encoding="utf-8", errors="replace"))
 
 
 def write_file(path, content):
-    target = Path(path).expanduser()
+    target = check_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"Wrote {len(content)} characters to {target}"
 
 
 def list_dir(path="."):
-    entries = sorted(Path(path).expanduser().iterdir(), key=lambda item: item.name.lower())
+    entries = sorted(check_path(path).iterdir(), key=lambda item: item.name.lower())
     return trim("\n".join(f"{'[DIR] ' if item.is_dir() else ''}{item.name}" for item in entries))
 
 
 def delete_path(path):
-    target = Path(path).expanduser()
+    target = check_path(path)
     if target.is_dir():
         shutil.rmtree(target)
     elif target.exists():
@@ -208,7 +222,7 @@ def delete_path(path):
 
 
 def search_files(query, root=""):
-    base = str(Path(root).expanduser()) if root else str(Path.home())
+    base = str(check_path(root or Path.home()))
     needle = query.lower()
     matches = []
     for dirpath, dirnames, filenames in os.walk(base):
@@ -229,9 +243,13 @@ def save_knowledge(title, text):
     return f"Saved to memory as {target.name}"
 
 
-def learn_from_file(path):
+def read_upload(path):
     source = Path(path).expanduser()
     return save_knowledge(source.stem, source.read_text(encoding="utf-8", errors="replace"))
+
+
+def learn_from_file(path):
+    return read_upload(check_path(path))
 
 
 def learn_from_url(url):
@@ -371,8 +389,14 @@ def parse_arguments(raw):
         return {}
 
 
-def run_turn(messages, on_tool):
-    for _ in range(12):
+CONFIRM_TOOLS = {"delete_path", "kill_process", "power_action", "write_file"}
+
+
+def run_turn(messages, on_tool, on_plan, confirm, cancel):
+    limit = int(SETTINGS["max_agent_steps"])
+    for step in range(1, limit + 1):
+        if cancel.is_set():
+            return None, "Kaam aapke kehne par rok diya gaya."
         try:
             message = ask_model(messages)
         except requests.RequestException as error:
@@ -381,15 +405,20 @@ def run_turn(messages, on_tool):
         calls = message.get("tool_calls") or []
         if not calls:
             return (message.get("content") or "").strip() or "Theek hai.", None
+        if message.get("content"):
+            on_plan(message["content"].strip())
         for call in calls:
             function = call.get("function", {})
             name = function.get("name", "")
             args = parse_arguments(function.get("arguments"))
-            on_tool(name)
-            result = execute(name, args)
+            on_tool(step, limit, name, args)
+            if name in CONFIRM_TOOLS and SETTINGS["confirm_destructive"] and not confirm(name, args):
+                result = "User ne is action ki permission nahi di. Ise skip karke batayein."
+            else:
+                result = execute(name, args)
             log_action(name, args, result)
             messages.append({"role": "tool", "content": result})
-    return None, "Kaam bahut lamba ho gaya. Chhota sawaal poochiye."
+    return None, f"Kaam {limit} steps mein poora nahi hua. Chhota sawaal poochiye ya Settings mein steps badhayein."
 
 
 def trim_history(messages):
@@ -461,6 +490,7 @@ class Jarvis:
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.recognizer = sr.Recognizer()
         self.stop_listening = threading.Event()
+        self.cancel = threading.Event()
         self.busy = False
         self.state = "idle"
         self.level = 0.0
@@ -495,6 +525,13 @@ class Jarvis:
         self.hint = tk.Label(root, text=STATE_INFO["idle"][1], font=(FONT, 10), fg=MUTED, bg=BG,
                              anchor="w")
         self.hint.pack(fill="x", padx=26, pady=(8, 0))
+
+        status = tk.Frame(root, bg=BG)
+        status.pack(fill="x", padx=26, pady=(6, 0))
+        self.activity = tk.Label(status, text="Agent: idle", font=(FONT, 9, "bold"), fg=CYAN, bg=BG, anchor="w")
+        self.activity.pack(side="left", fill="x", expand=True)
+        self.make_button(status, "STOP", self.stop_agent).pack(side="right", padx=(6, 0))
+        self.make_button(status, "LOGS", self.open_logs).pack(side="right")
 
         chat_frame = tk.Frame(root, bg=PANEL, highlightthickness=1, highlightbackground=PANEL_EDGE)
         chat_frame.pack(fill="both", expand=True, padx=24, pady=(10, 12))
@@ -571,6 +608,7 @@ class Jarvis:
 
     def start(self, target, *args):
         self.busy = True
+        self.cancel.clear()
         threading.Thread(target=target, args=args, daemon=True).start()
 
     def voice_turn(self):
@@ -614,7 +652,7 @@ class Jarvis:
     def learn_file_turn(self, path):
         self.emit("state", "thinking")
         try:
-            result = learn_from_file(path)
+            result = read_upload(path)
             self.emit("info", f"{Path(path).name} sikh li. {result}.")
             speak("File sikh li hai.")
         except Exception as error:
@@ -662,7 +700,7 @@ class Jarvis:
         self.finish()
 
     def open_settings(self):
-        win = self.make_dialog("SETTINGS", 520, 620)
+        win = self.make_dialog("SETTINGS", 520, 880)
         fields = {}
         for key, label in (("model", "OLLAMA MODEL"), ("ollama_url", "OLLAMA URL"),
                            ("language", "BOLNE KI LANGUAGE (hi-IN, en-IN, en-US)")):
@@ -689,6 +727,22 @@ class Jarvis:
         tk.Scale(win, from_=100, to=1500, orient="horizontal", variable=threshold_var, bg=BG, fg=TEXT,
                  troughcolor=PANEL, highlightthickness=0, activebackground=CYAN).pack(fill="x", padx=22)
 
+        tk.Label(win, text="FOLDERS JARVIS FILES CHHU SAKTA HAI (ek line mein ek folder)", font=(FONT, 9, "bold"),
+                 fg=CYAN, bg=BG, anchor="w").pack(fill="x", padx=22, pady=(14, 4))
+        folders = tk.Text(win, height=3, font=(FONT, 10), bg=PANEL, fg=TEXT, insertbackground=CYAN,
+                          relief="flat", wrap="none", highlightthickness=1, highlightbackground=PANEL_EDGE)
+        folders.insert("1.0", "\n".join(SETTINGS["allowed_folders"]))
+        folders.pack(fill="x", padx=22)
+        steps_var = tk.IntVar(value=int(SETTINGS["max_agent_steps"]))
+        tk.Label(win, text="AGENT STEPS (ek kaam mein maximum tool calls)", font=(FONT, 9, "bold"), fg=CYAN, bg=BG,
+                 anchor="w").pack(fill="x", padx=22, pady=(14, 0))
+        tk.Scale(win, from_=3, to=30, orient="horizontal", variable=steps_var, bg=BG, fg=TEXT,
+                 troughcolor=PANEL, highlightthickness=0, activebackground=CYAN).pack(fill="x", padx=22)
+        confirm_var = tk.BooleanVar(value=bool(SETTINGS["confirm_destructive"]))
+        tk.Checkbutton(win, text="Delete, kill, power aur file overwrite se pehle poochho", variable=confirm_var,
+                       font=(FONT, 10), fg=TEXT, bg=BG, selectcolor=PANEL, activebackground=BG,
+                       activeforeground=TEXT).pack(anchor="w", padx=22, pady=(14, 0))
+
         def save():
             for key, entry in fields.items():
                 value = entry.get().strip()
@@ -699,6 +753,13 @@ class Jarvis:
             SETTINGS["voice_enabled"] = bool(voice_var.get())
             SETTINGS["speech_rate"] = int(rate_var.get())
             SETTINGS["mic_threshold"] = int(threshold_var.get())
+            folder_list = [line.strip() for line in folders.get("1.0", "end").splitlines() if line.strip()]
+            if not folder_list:
+                messagebox.showwarning("Jarvis", "Kam se kam ek folder allowed honi chahiye.", parent=win)
+                return
+            SETTINGS["allowed_folders"] = folder_list
+            SETTINGS["max_agent_steps"] = int(steps_var.get())
+            SETTINGS["confirm_destructive"] = bool(confirm_var.get())
             save_settings(SETTINGS)
             win.destroy()
             self.footer.configure(text=f"Model: {SETTINGS['model']}  |  Ollama check ho raha hai...")
@@ -722,7 +783,46 @@ class Jarvis:
     def respond(self, text):
         self.emit("user", text)
         self.messages.append({"role": "user", "content": text})
-        reply, error = run_turn(self.messages, lambda name: self.emit("tool", name))
+        reply, error = run_turn(self.messages, self.report_tool, self.report_plan, self.confirm_tool, self.cancel)
+
+    def report_tool(self, step, limit, name, args):
+        detail = json.dumps(args, ensure_ascii=False)[:160]
+        self.emit("activity", f"Step {step}/{limit}: {name} {detail}")
+        self.emit("tool", f"{name} {detail}")
+
+    def report_plan(self, text):
+        self.emit("plan", text)
+
+    def confirm_tool(self, name, args):
+        answer = {"ok": False}
+        asked = threading.Event()
+        self.emit("confirm", (name, args, answer, asked))
+        asked.wait(300)
+        return answer["ok"]
+
+    def stop_agent(self):
+        self.cancel.set()
+        self.emit("info", "Stop ka signal bheja gaya. Jarvis current step ke baad ruk jayega.")
+
+    def open_logs(self):
+        win = self.make_dialog("ACTION LOG", 760, 520)
+        view = tk.Text(win, font=(FONT, 9), bg=PANEL, fg=TEXT, relief="flat", wrap="none",
+                       highlightthickness=1, highlightbackground=PANEL_EDGE)
+
+        def refresh():
+            lines = ACTION_LOG.read_text(encoding="utf-8", errors="replace").splitlines()[-300:] if ACTION_LOG.exists() else []
+            view.configure(state="normal")
+            view.delete("1.0", "end")
+            view.insert("1.0", "\n".join(lines) or "Abhi koi action log nahi hai.")
+            view.configure(state="disabled")
+            view.see("end")
+
+        buttons = tk.Frame(win, bg=BG)
+        buttons.pack(fill="x", padx=22, pady=14, side="bottom")
+        self.make_button(buttons, "REFRESH", refresh).pack(side="right")
+        self.make_button(buttons, "CLOSE", win.destroy).pack(side="right", padx=(0, 8))
+        view.pack(fill="both", expand=True, padx=22, pady=(10, 0))
+        refresh()
         trim_history(self.messages)
         if error:
             self.emit("error", error)
@@ -801,9 +901,21 @@ class Jarvis:
                 self.add_line("SYSTEM", value, "info", "muted")
             elif kind == "footer":
                 self.footer.configure(text=value)
+            elif kind == "activity":
+                self.activity.configure(text=value)
+            elif kind == "plan":
+                self.add_line("PLAN", value, "info", "muted")
+            elif kind == "confirm":
+                name, args, answer, asked = value
+                answer["ok"] = messagebox.askyesno(
+                    "Jarvis - Permission",
+                    f"Jarvis ye action chalana chahta hai:\n\n{name}\n{json.dumps(args, ensure_ascii=False)[:400]}\n\nAllow karein?",
+                    parent=self.root)
+                asked.set()
             elif kind == "done":
                 self.busy = False
                 self.set_state("idle")
+                self.activity.configure(text="Agent: idle")
                 self.entry.focus_set()
         self.root.after(50, self.poll)
 
