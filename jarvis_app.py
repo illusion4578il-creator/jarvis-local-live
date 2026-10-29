@@ -53,6 +53,12 @@ SYSTEM_PROMPT = (
     "For a GitHub repo the user names, use setup_repo with its URL: it clones or downloads the repo, reads its README "
     "and installs its dependencies (npm install, or a .venv with pip install -r requirements.txt). Then explain in one or "
     "two lines what the project does and how to run it. Run its code only after the user agrees. "
+    "When asked to build or scaffold a new software project from scratch, follow this Autonomous Multi-File Plan-and-Execute Workflow without stopping early: "
+    "(Step a) Break the requirement into a complete file list (config, backend, frontend, models, utils) and call create_project_scaffold(project_name, tech_stack, file_structure_map) to initialize all folders and files in one operation; "
+    "(Step b) Sequentially generate and write the complete, non-truncated code into EVERY file using write_file or edit_file (never stop after creating just one file, and never leave empty or TODO placeholder files); "
+    "(Step c) Create complete config and environment files (such as package.json, requirements.txt, .env.example, README.md); "
+    "(Step d) Run dependency installation commands automatically via run_command (such as python -m venv .venv and pip install -r requirements.txt, or npm install); "
+    "(Step e) Run verify_project_code(project_path) to run syntax compilation (python -m py_compile, node --check, JSON validation, and import checks) and fix any errors with edit_file before marking the project complete. "
     "To write or change code, use search_code to find the right file, read_file to read it, then edit_file to change only "
     "the lines that need it (write_file only for a brand-new file), and open_vscode to show the folder in VS Code. "
     "If a run fails with an error, read the error text, find the cause, fix the file with edit_file and run it again; "
@@ -82,7 +88,7 @@ DEFAULT_SETTINGS = {
     "speech_rate": 180,
     "mic_threshold": 400,
     "allowed_folders": [str(Path.home())],
-    "max_agent_steps": 12,
+    "max_agent_steps": 30,
     "vision_model": os.getenv("OLLAMA_VISION_MODEL", "llava"),
     "confirm_destructive": True,
 }
@@ -566,6 +572,210 @@ def search_codebase(query, limit=5):
     return trim("\n\n---\n\n".join(parts) or "Kuch relevant nahi mila.")
 
 
+def _flatten_structure_map(node, prefix=""):
+    """Normalizes a JSON dict, list, or nested tree into (relative_path, initial_content_or_None) pairs."""
+    items = []
+    if isinstance(node, str):
+        cleaned = node.strip().strip("/\\")
+        if cleaned:
+            items.append((cleaned, "" if Path(cleaned).suffix or cleaned.startswith(".") else None))
+    elif isinstance(node, list):
+        for entry in node:
+            items.extend(_flatten_structure_map(entry, prefix))
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            clean_key = str(key).strip().strip("/\\")
+            if not clean_key:
+                continue
+            rel = f"{prefix}/{clean_key}" if prefix else clean_key
+            if isinstance(value, (dict, list)):
+                items.append((rel, None))
+                items.extend(_flatten_structure_map(value, rel))
+            elif value is None:
+                is_file = bool(Path(clean_key).suffix) or clean_key.startswith(".")
+                items.append((rel, "" if is_file else None))
+            else:
+                items.append((rel, str(value)))
+    return items
+
+
+def create_project_scaffold(project_name, tech_stack, file_structure_map, base_folder=""):
+    """
+    Autonomous Project Builder Tool:
+    Creates the project root directory, all sub-directories, and initializes all
+    boilerplate files from file_structure_map (JSON string, dict, or list) in one operation.
+    """
+    raw_name = str(project_name).strip()
+    if not raw_name:
+        return "Error: project_name खाली नहीं हो सकता।"
+
+    if os.path.isabs(raw_name) or "/" in raw_name or "\\" in raw_name:
+        project_root = check_path(raw_name)
+    else:
+        safe_name = re.sub(r"[^\w.\-]+", "_", raw_name).strip("_") or "new_project"
+        parent_dir = check_path(base_folder) if base_folder else Path.home()
+        project_root = (parent_dir / safe_name).resolve()
+
+    if isinstance(file_structure_map, str):
+        try:
+            parsed_map = json.loads(file_structure_map)
+        except ValueError:
+            lines = [line.strip() for line in file_structure_map.splitlines() if line.strip()]
+            parsed_map = lines
+    else:
+        parsed_map = file_structure_map
+
+    entries = _flatten_structure_map(parsed_map)
+    if not entries:
+        return "Error: file_structure_map mein koi valid folder ya file path nahi mila."
+
+    project_root.mkdir(parents=True, exist_ok=True)
+    created_dirs = [str(project_root)]
+    created_files = []
+
+    for rel_path, initial_content in entries:
+        target = (project_root / rel_path).resolve()
+        if not str(target).startswith(str(project_root)):
+            continue
+        if initial_content is None and not str(rel_path).endswith(("/", "\\")) and not Path(rel_path).suffix and not Path(rel_path).name.startswith("."):
+            target.mkdir(parents=True, exist_ok=True)
+            created_dirs.append(str(target.relative_to(project_root)))
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists():
+                target.write_text(initial_content or "", encoding="utf-8")
+            elif initial_content:
+                target.write_text(initial_content, encoding="utf-8")
+            created_files.append(str(target.relative_to(project_root)))
+
+    manifest = {
+        "project_name": project_root.name,
+        "project_root": str(project_root),
+        "tech_stack": tech_stack,
+        "directories_created": len(set(created_dirs)),
+        "files_initialized": created_files,
+        "next_required_steps": [
+            "Step b: Sequentially call write_file (or edit_file) to write complete, non-truncated code for EVERY file in files_initialized.",
+            "Step c: Populate config & environment files (package.json, requirements.txt, .env.example).",
+            "Step d: Run dependency installation via run_command.",
+            f"Step e: Call verify_project_code(project_path='{project_root}') to lint and compile-check all files."
+        ]
+    }
+    return json.dumps(manifest, ensure_ascii=False, indent=2)
+
+
+def verify_project_code(project_path):
+    """
+    Code Verification & Test Tool:
+    Scans a project folder, checks for unpopulated/empty scaffold files, runs
+    `python -m py_compile` and AST import verification on all .py files,
+    runs `node --check` on .js/.mjs files, and validates all .json files.
+    """
+    import ast
+
+    target = check_path(project_path)
+    if not target.is_dir():
+        return f"Project folder nahi mila: {target}"
+
+    checked_files = []
+    empty_files = []
+    syntax_errors = []
+    import_warnings = []
+
+    local_py_modules = set()
+    for dirpath, dirnames, filenames in os.walk(target):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for fname in filenames:
+            fpath = Path(dirpath) / fname
+            if fpath.suffix.lower() == ".py":
+                local_py_modules.add(fpath.stem)
+        for dname in dirnames:
+            local_py_modules.add(dname)
+
+    node_bin = shutil.which("node")
+
+    for dirpath, dirnames, filenames in os.walk(target):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for fname in sorted(filenames):
+            fpath = Path(dirpath) / fname
+            rel = str(fpath.relative_to(target))
+            ext = fpath.suffix.lower()
+
+            if fname == ".gitkeep":
+                continue
+
+            try:
+                content = fpath.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                syntax_errors.append(f"{rel}: Read error ({exc})")
+                continue
+
+            if ext in CODE_EXTENSIONS and fname != "__init__.py" and not content.strip():
+                empty_files.append(rel)
+                continue
+
+            if ext == ".py":
+                checked_files.append(rel)
+                compile_res = subprocess.run(
+                    [sys.executable, "-m", "py_compile", str(fpath)],
+                    capture_output=True,
+                    text=True,
+                    cwd=str(target),
+                    timeout=30
+                )
+                if compile_res.returncode != 0:
+                    err_msg = (compile_res.stderr or compile_res.stdout).strip()
+                    syntax_errors.append(f"[py_compile FAIL] {rel}:\n{err_msg}")
+                    continue
+
+                try:
+                    tree = ast.parse(content, filename=str(fpath))
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.ImportFrom) and node.level and node.level > 0:
+                            mod_name = (node.module or "").split(".")[0]
+                            if mod_name and mod_name not in local_py_modules:
+                                import_warnings.append(f"{rel}:{node.lineno} relative import '{node.module}' module not found in project")
+                except SyntaxError as syn_err:
+                    syntax_errors.append(f"[AST SyntaxError] {rel}:{syn_err.lineno}: {syn_err.msg}")
+
+            elif ext in (".js", ".mjs", ".cjs") and node_bin:
+                checked_files.append(rel)
+                node_res = subprocess.run(
+                    [node_bin, "--check", str(fpath)],
+                    capture_output=True,
+                    text=True,
+                    cwd=str(target),
+                    timeout=30
+                )
+                if node_res.returncode != 0:
+                    err_msg = (node_res.stderr or node_res.stdout).strip()
+                    syntax_errors.append(f"[node --check FAIL] {rel}:\n{err_msg}")
+
+            elif ext == ".json":
+                checked_files.append(rel)
+                try:
+                    json.loads(content)
+                except ValueError as json_err:
+                    syntax_errors.append(f"[Invalid JSON] {rel}: {json_err}")
+
+    passed = (len(syntax_errors) == 0 and len(empty_files) == 0)
+    report = {
+        "status": "PASSED" if passed else "FAILED",
+        "project_path": str(target),
+        "files_verified_count": len(checked_files),
+        "verified_files": checked_files,
+        "empty_unwritten_files": empty_files,
+        "syntax_or_compile_errors": syntax_errors,
+        "import_warnings": import_warnings,
+        "action_required": (
+            "All files compiled and verified cleanly! Project is ready."
+            if passed
+            else "Fix all syntax_or_compile_errors and write complete code into any empty_unwritten_files using write_file or edit_file, then run verify_project_code again."
+        )
+    }
+    return json.dumps(report, ensure_ascii=False, indent=2)
+
+
 TOOL_FUNCTIONS = {
     "run_command": run_command,
     "open_app": open_app,
@@ -597,6 +807,8 @@ TOOL_FUNCTIONS.update({
 TOOL_FUNCTIONS.update({
     "index_codebase": index_codebase,
     "search_codebase": search_codebase,
+    "create_project_scaffold": create_project_scaffold,
+    "verify_project_code": verify_project_code,
 })
 
 
@@ -665,6 +877,18 @@ TOOL_SCHEMAS += [
     tool("search_codebase", "Find the code most related to a question or feature, by meaning, from the indexed "
          "project. Returns file paths, line numbers and code snippets.",
          {"query": TEXT_SCHEMA, "limit": {"type": "integer"}}, ["query"]),
+    tool("create_project_scaffold", "Create a new software project directory, all sub-directories, and initialize "
+         "all blank or boilerplate files in one operation from a JSON file_structure_map (object, array of paths, or JSON string). "
+         "After calling this tool, sequentially write full code into every file using write_file, install dependencies with "
+         "run_command, and validate the project with verify_project_code.",
+         {"project_name": TEXT_SCHEMA, "tech_stack": TEXT_SCHEMA,
+          "file_structure_map": {"type": "string", "description": "JSON string or list/dict of relative folder and file paths to initialize."},
+          "base_folder": TEXT_SCHEMA},
+         ["project_name", "tech_stack", "file_structure_map"]),
+    tool("verify_project_code", "Run syntax compilation and verification across a project folder (python -m py_compile "
+         "and AST import checks for .py files, node --check for .js files, JSON validation for .json files, and empty file detection). "
+         "Always run this after generating project files to ensure zero broken syntax or unwritten files.",
+         {"project_path": TEXT_SCHEMA}, ["project_path"]),
 ]
 
 
@@ -706,6 +930,9 @@ CONFIRM_TOOLS = {"delete_path", "kill_process", "power_action", "write_file", "e
 
 def run_turn(messages, on_tool, on_plan, confirm, cancel):
     limit = int(SETTINGS["max_agent_steps"])
+    active_project_root = None
+    project_verified = False
+
     for step in range(1, limit + 1):
         if cancel.is_set():
             return None, "Kaam aapke kehne par rok diya gaya."
@@ -716,6 +943,25 @@ def run_turn(messages, on_tool, on_plan, confirm, cancel):
         messages.append(message)
         calls = message.get("tool_calls") or []
         if not calls:
+            # If a project was scaffolded in this turn, ensure all files are populated and verified before stopping
+            if active_project_root and not project_verified:
+                verification_raw = verify_project_code(active_project_root)
+                try:
+                    v_report = json.loads(verification_raw)
+                except ValueError:
+                    v_report = {}
+                empty_list = v_report.get("empty_unwritten_files") or []
+                err_list = v_report.get("syntax_or_compile_errors") or []
+                if empty_list or err_list:
+                    nudge = (
+                        f"AUTONOMOUS BUILDER CONTINUATION: Project at {active_project_root} is not complete yet.\n"
+                        f"Empty files still needing full code via write_file: {empty_list}\n"
+                        f"Syntax/Compile errors to fix via edit_file: {err_list}\n"
+                        "Continue writing the remaining files, install dependencies if needed, and call verify_project_code."
+                    )
+                    messages.append({"role": "user", "content": nudge})
+                    continue
+                project_verified = True
             return (message.get("content") or "").strip() or "Theek hai.", None
         if message.get("content"):
             on_plan(message["content"].strip())
@@ -728,6 +974,20 @@ def run_turn(messages, on_tool, on_plan, confirm, cancel):
                 result = "User ne is action ki permission nahi di. Ise skip karke batayein."
             else:
                 result = execute(name, args)
+            if name == "create_project_scaffold":
+                try:
+                    parsed_scaffold = json.loads(result)
+                    active_project_root = parsed_scaffold.get("project_root")
+                    project_verified = False
+                except ValueError:
+                    pass
+            elif name == "verify_project_code":
+                try:
+                    parsed_verify = json.loads(result)
+                    if parsed_verify.get("status") == "PASSED":
+                        project_verified = True
+                except ValueError:
+                    pass
             log_action(name, args, result)
             messages.append({"role": "tool", "content": result})
     return None, f"Kaam {limit} steps mein poora nahi hua. Chhota sawaal poochiye ya Settings mein steps badhayein."
@@ -1091,7 +1351,7 @@ class Jarvis:
         steps_var = tk.IntVar(value=int(SETTINGS["max_agent_steps"]))
         tk.Label(win, text="AGENT STEPS (ek kaam mein maximum tool calls)", font=(FONT, 9, "bold"), fg=CYAN, bg=BG,
                  anchor="w").pack(fill="x", padx=22, pady=(14, 0))
-        tk.Scale(win, from_=3, to=30, orient="horizontal", variable=steps_var, bg=BG, fg=TEXT,
+        tk.Scale(win, from_=3, to=50, orient="horizontal", variable=steps_var, bg=BG, fg=TEXT,
                  troughcolor=PANEL, highlightthickness=0, activebackground=CYAN).pack(fill="x", padx=22)
         confirm_var = tk.BooleanVar(value=bool(SETTINGS["confirm_destructive"]))
         tk.Checkbutton(win, text="Delete, kill, power aur file overwrite se pehle poochho", variable=confirm_var,
@@ -1134,6 +1394,15 @@ class Jarvis:
         self.emit("user", text)
         self.messages.append({"role": "user", "content": text})
         reply, error = run_turn(self.messages, self.report_tool, self.report_plan, self.confirm_tool, self.cancel)
+        trim_history(self.messages)
+        if error:
+            self.emit("error", error)
+            speak(error)
+            return
+        self.emit("answer", reply)
+        if SETTINGS["voice_enabled"]:
+            self.emit("state", "speaking")
+        speak(reply)
 
     def report_tool(self, step, limit, name, args):
         detail = json.dumps(args, ensure_ascii=False)[:160]
@@ -1173,15 +1442,6 @@ class Jarvis:
         self.make_button(buttons, "CLOSE", win.destroy).pack(side="right", padx=(0, 8))
         view.pack(fill="both", expand=True, padx=22, pady=(10, 0))
         refresh()
-        trim_history(self.messages)
-        if error:
-            self.emit("error", error)
-            speak(error)
-            return
-        self.emit("answer", reply)
-        if SETTINGS["voice_enabled"]:
-            self.emit("state", "speaking")
-        speak(reply)
 
     def finish(self):
         self.emit("state", "idle")

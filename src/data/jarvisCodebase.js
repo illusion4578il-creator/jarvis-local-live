@@ -1,5 +1,6 @@
 import bootstrapSource from '../../jarvis_bootstrap.py?raw';
 import launcherSource from '../../Launch_Jarvis.bat?raw';
+import jarvisAppSource from '../../jarvis_app.py?raw';
 
 export const SYSTEM_PROMPT_TEXT = `You are an advanced, autonomous personal AI assistant running locally on the user's computer, inspired by Jarvis. Your user's name is Akash. You are interacting via a real-time Voice Call Interface.Directives:
 1. Speak naturally in Hinglish. Keep your spoken responses concise and conversational.
@@ -1091,5 +1092,13 @@ Optional .env settings: ODYSSEUS_BASE_URL=http://localhost:7011, ODYSSEUS_HEALTH
     language: 'text',
     description: 'Windows double-click launcher. Finds Python 3.11, then runs jarvis_bootstrap.py, which handles venv, packages and startup.',
     content: launcherSource
+  },
+  {
+    id: 'jarvis_app',
+    title: '10. Autonomous AI Engineer (jarvis_app.py)',
+    filename: 'jarvis_app.py',
+    language: 'python',
+    description: 'Standalone Tkinter Voice + Devin-style AI Software Engineer with create_project_scaffold, multi-file plan-and-execute loop, and verify_project_code linter/compiler.',
+    content: jarvisAppSource
   }
 ];
