@@ -182,7 +182,8 @@ export default function Home() {
       .fetch()
       .then((r) => {
         if (!r.success) throw new Error(r.message);
-        return r.data;\n      }),
+        return r.data;
+      }),
   []);
 
   async function handleSimulateVoiceCommand(preset) {
@@ -612,7 +613,8 @@ export default function Home() {
                         <div className="flex items-center gap-2">
                           <Badge variant="outline" className="text-[11px]">
                             {item.tool_used_c}
-                          </Badge>\n                          <Badge
+                          </Badge>
+                          <Badge
                             variant="outline"
                             className={`text-[11px] ${STATUS_BADGE_MAP[item.status_c] || ''}`}
                           >
