@@ -50,6 +50,10 @@ SYSTEM_PROMPT = (
     "CRITICAL AUTONOMOUS EXECUTION RULES:\n"
     "1. NEVER ask the user for confirmation before running a project, starting a server, installing packages, creating files, "
     "or fixing errors. Execute the entire workflow end-to-end autonomously until the user's goal is completely solved.\n"
+    "1a. DECISION OWNERSHIP: You are the decision maker. For every small choice (folder name, file names, tech stack, "
+    "framework, package manager, port, which script to run, how to fix an error) pick the most reasonable option yourself "
+    "and proceed. Never leave a decision open, never reply with 'which one should I use?' or 'kya karun?', and never stop "
+    "to wait for input. If two options are equally valid, choose the one most common for the task and state the choice in one line.\n"
     f"2. Always use REAL paths under {USER_HOME} (for example {USER_HOME}\\Documents\\...). NEVER use placeholder paths "
     "like C:\\Users\\name or fake GitHub URLs like https://github.com/your-username/repo.\n"
     "3. Always invoke tools using native tool_calls. NEVER print raw JSON like {\"name\": ...} in your text reply.\n"
@@ -2027,6 +2031,8 @@ def run_turn(messages, on_tool, on_plan, confirm, cancel):
     last_failed_tool = None
     self_heal_retries = 0
     max_self_heal_retries = 4
+    decision_nudges = 0
+    max_decision_nudges = 3
 
     for step in range(1, limit + 1):
         if cancel.is_set():
@@ -2052,6 +2058,23 @@ def run_turn(messages, on_tool, on_plan, confirm, cancel):
         messages.append(message)
 
         if not calls:
+            asks_user = any(
+                phrase in raw_content.lower()
+                for phrase in (
+                    "which one", "which option", "should i ", "do you want me", "would you like me",
+                    "kaun sa", "kaunsa", "kya karun", "kya karoon", "batayein", "aap batao", "confirm karein",
+                )
+            )
+            if asks_user and decision_nudges < max_decision_nudges:
+                decision_nudges += 1
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "DECISION DIRECTIVE: Do not ask the user. You own every decision. Pick the most reasonable "
+                        "option now (state it in one line) and immediately call the next tool to continue the task."
+                    ),
+                })
+                continue
             # 1. Autonomous Self-Healing Continuation: if the previous tool failed OR the model said "I'll try again"
             # without emitting a tool call, automatically push it to diagnose and execute the fix!
             promises_retry = any(
